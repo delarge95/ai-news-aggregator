@@ -3,6 +3,8 @@
  * Service for fetching articles from the AI News Aggregator API
  */
 
+import { buildApiUrl } from "../config/api";
+
 export interface Article {
   id: string;
   title: string;
@@ -10,11 +12,15 @@ export interface Article {
   summary?: string;
   url: string;
   published_at?: string;
+  created_at?: string;
+  updated_at?: string;
+  author?: string;
   source_name?: string;
   source_url?: string;
   sentiment_score?: number;
   sentiment_label?: string;
-  topic_tags?: string[];
+  relevance_score?: number;
+  topic_tags?: unknown;
 }
 
 export interface ArticlesResponse {
@@ -27,8 +33,6 @@ export interface ArticlesResponse {
   has_prev: boolean;
 }
 
-const API_BASE_URL = 'http://localhost:8000/api/v1';
-
 class ArticleService {
   /**
    * Get articles with pagination
@@ -39,10 +43,10 @@ class ArticleService {
   async getArticles(page: number = 1, perPage: number = 20): Promise<ArticlesResponse> {
     try {
       const response = await fetch(
-        `${API_BASE_URL}/articles/articles?page=${page}&per_page=${perPage}`,
+        buildApiUrl(`/articles/articles?page=${page}&per_page=${perPage}`),
         {
           headers: {
-            'Content-Type': 'application/json',
+            "Content-Type": "application/json",
           },
         }
       );
@@ -78,10 +82,10 @@ class ArticleService {
       });
 
       const response = await fetch(
-        `${API_BASE_URL}/articles/articles?${params.toString()}`,
+        buildApiUrl(`/articles/articles?${params.toString()}`),
         {
           headers: {
-            'Content-Type': 'application/json',
+            "Content-Type": "application/json",
           },
         }
       );

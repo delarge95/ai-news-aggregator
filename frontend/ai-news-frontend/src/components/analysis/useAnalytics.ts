@@ -3,6 +3,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { buildApiUrl } from '../../config/api';
 import {
   AnalyticsResponse,
   AnalyticsFilters,
@@ -54,7 +55,7 @@ export const useAnalytics = (filters: AnalyticsFilters = {}): UseAnalyticsReturn
         params.append('topics', filters.topics.join(','));
       }
 
-      const response = await fetch(`/api/v1/analytics/comprehensive?${params.toString()}`);
+      const response = await fetch(buildApiUrl(`/analytics/comprehensive?${params.toString()}`));
       
       if (!response.ok) {
         throw new Error(`Error al obtener datos de análisis: ${response.status}`);

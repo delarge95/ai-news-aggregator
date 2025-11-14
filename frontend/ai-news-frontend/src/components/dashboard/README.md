@@ -100,7 +100,7 @@ El dashboard integra con los siguientes endpoints:
 ### Variables de Entorno
 ```bash
 # .env
-VITE_API_BASE_URL=http://localhost:8000
+VITE_API_BASE_URL=http://localhost:8000/api/v1
 VITE_DASHBOARD_REFRESH_INTERVAL=30000
 ```
 

@@ -1,246 +1,295 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { 
-  NewsList, 
-  NewsArticle, 
-  NewsFilters, 
-  SortOption, 
-  PaginationInfo, 
-  AutocompleteSuggestion,
-  FilterPanelState,
+import {
+  NewsList,
+  type NewsArticle,
+  type NewsFilters,
+  type SortOption,
+  type PaginationInfo,
+  type AutocompleteSuggestion,
+  type FilterPanelState,
   DEFAULT_SORT_OPTIONS,
-  LoadingSkeleton,
-  InfiniteScroll,
-  ErrorState,
-  EmptyState
 } from './index';
+import { articleService, type Article as ArticleDTO } from '@/services/articleService';
 
-// Mock data mejorado para demostración
-const mockArticles: NewsArticle[] = [
-  {
-    id: '1',
-    title: 'Avances Revolucionarios en Inteligencia Artificial Transforman la Industria Tech Global',
-    content: 'Las últimas innovaciones en IA están revolucionando cómo las empresas operan en el siglo XXI...',
-    summary: 'Las empresas tecnológicas están implementando soluciones de IA para mejorar la eficiencia operativa y reducir costos.',
-    url: 'https://example.com/news/1',
-    source: 'TechCrunch',
-    author: 'Juan Pérez',
-    publishedAt: '2025-11-06T10:30:00Z',
-    imageUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af2176?w=800',
-    tags: ['IA', 'tecnología', 'innovación', 'empresas'],
-    category: 'Tecnología',
-    aiMetadata: {
-      sentiment: 'positive',
-      confidence: 85,
-      keywords: ['inteligencia artificial', 'industria', 'tecnología', 'eficiencia'],
-      entities: {
-        organization: ['TechCrunch', 'Microsoft', 'Google'],
-        person: ['Juan Pérez', 'Satya Nadella'],
-        location: ['Silicon Valley']
-      },
-      relevanceScore: 92,
-      topic: ['Inteligencia Artificial', 'Tecnología', 'Negocios'],
-      readability: 78,
-      language: 'es'
-    }
-  },
-  {
-    id: '2',
-    title: 'Nuevos Desarrollos en Machine Learning Automático Alcanzan Precisión Record',
-    content: 'Los algoritmos de ML automático están alcanzando nuevos niveles de precisión en tareas complejas...',
-    summary: 'Investigadores de universidades prestigiosas presentan avances significativos en aprendizaje automático.',
-    url: 'https://example.com/news/2',
-    source: 'MIT Technology Review',
-    author: 'María García',
-    publishedAt: '2025-11-06T09:15:00Z',
-    imageUrl: 'https://images.unsplash.com/photo-1485827404703-89b55fcc595e?w=800',
-    tags: ['machine learning', 'investigación', 'algoritmos', 'precisión'],
-    category: 'Investigación',
-    aiMetadata: {
-      sentiment: 'neutral',
-      confidence: 76,
-      keywords: ['machine learning', 'algoritmos', 'precisión', 'investigación'],
-      entities: {
-        organization: ['MIT Technology Review', 'Stanford University'],
-        person: ['María García', 'Andrew Ng']
-      },
-      relevanceScore: 88,
-      topic: ['Machine Learning', 'Investigación', 'Ciencia'],
-      readability: 82,
-      language: 'es'
-    }
-  },
-  {
-    id: '3',
-    title: 'OpenAI Anuncia Capacidades Revolucionarias en GPT-5 para Generación de Texto',
-    content: 'La última versión de GPT promete revolucionar la generación de texto con capacidades sin precedentes...',
-    summary: 'OpenAI presenta innovaciones en su modelo de lenguaje más avanzado con capacidades multimodales.',
-    url: 'https://example.com/news/3',
-    source: 'The Verge',
-    author: 'Carlos López',
-    publishedAt: '2025-11-06T08:00:00Z',
-    tags: ['OpenAI', 'GPT', 'texto', 'multimodal'],
-    category: 'Tecnología',
-    aiMetadata: {
-      sentiment: 'positive',
-      confidence: 91,
-      keywords: ['OpenAI', 'GPT', 'generación de texto', 'multimodal'],
-      entities: {
-        organization: ['OpenAI', 'The Verge'],
-        person: ['Carlos López', 'Sam Altman']
-      },
-      relevanceScore: 95,
-      topic: ['OpenAI', 'GPT', 'IA Generativa'],
-      readability: 85,
-      language: 'es'
-    }
-  },
-  {
-    id: '4',
-    title: 'Startups de IA Reciben Inversión Récord de $2.5 Billones en 2024',
-    content: 'El ecosistema de startups de inteligencia artificial continúa expandiéndose con inversiones históricas...',
-    summary: 'Los inversores muestran confianza creciente en el potencial de la IA para transformar múltiples industrias.',
-    url: 'https://example.com/news/4',
-    source: 'Forbes',
-    author: 'Ana Martín',
-    publishedAt: '2025-11-06T07:45:00Z',
-    tags: ['startups', 'inversión', 'IA', 'ecosistema'],
-    category: 'Negocios',
-    aiMetadata: {
-      sentiment: 'positive',
-      confidence: 89,
-      keywords: ['startups', 'inversión', 'IA', 'ecosistema'],
-      entities: {
-        organization: ['Forbes', 'Sequoia Capital'],
-        person: ['Ana Martín']
-      },
-      relevanceScore: 87,
-      topic: ['Inversión', 'Startups', 'IA'],
-      readability: 79,
-      language: 'es'
-    }
-  },
-  {
-    id: '5',
-    title: 'Problemas Éticos en IA: Expertos Advierten sobre Sesgos Algorítmicos',
-    content: 'Investigadores señalan la importancia de abordar los sesgos en sistemas de inteligencia artificial...',
-    summary: 'La comunidad científica insta a desarrollar frameworks éticos más robustos para el desarrollo de IA.',
-    url: 'https://example.com/news/5',
-    source: 'Nature',
-    author: 'Dr. Roberto Silva',
-    publishedAt: '2025-11-06T06:30:00Z',
-    tags: ['ética', 'sesgos', 'algoritmos', 'responsabilidad'],
-    category: 'Ciencia',
-    aiMetadata: {
-      sentiment: 'negative',
-      confidence: 72,
-      keywords: ['ética', 'sesgos', 'algoritmos', 'responsabilidad'],
-      entities: {
-        organization: ['Nature', 'AI Ethics Institute'],
-        person: ['Dr. Roberto Silva']
-      },
-      relevanceScore: 84,
-      topic: ['Ética IA', 'Sesgos', 'Responsabilidad'],
-      readability: 88,
-      language: 'es'
-    }
+const DEFAULT_PAGE_SIZE = 20;
+
+const EMPTY_PAGINATION: PaginationInfo = {
+  page: 1,
+  limit: DEFAULT_PAGE_SIZE,
+  total: 0,
+  totalPages: 0,
+  hasNext: false,
+  hasPrevious: false,
+};
+
+const normalizeTags = (tags: ArticleDTO['topic_tags']): string[] => {
+  if (!tags) {
+    return [];
   }
-];
 
-const mockSuggestions: AutocompleteSuggestion[] = [
-  { value: 'inteligencia artificial', label: 'Inteligencia Artificial', type: 'keyword', count: 45 },
-  { value: 'machine learning', label: 'Machine Learning', type: 'keyword', count: 32 },
-  { value: 'OpenAI', label: 'OpenAI', type: 'source', count: 28 },
-  { value: 'ChatGPT', label: 'ChatGPT', type: 'keyword', count: 22 },
-  { value: 'tecnología', label: 'Tecnología', type: 'category', count: 67 },
-  { value: 'GPT-5', label: 'GPT-5', type: 'keyword', count: 15 },
-  { value: 'ética IA', label: 'Ética en IA', type: 'topic', count: 12 },
-  { value: 'startups', label: 'Startups', type: 'category', count: 18 }
-];
+  if (Array.isArray(tags)) {
+    return tags
+      .map((tag) => String(tag).trim())
+      .filter(Boolean);
+  }
 
-const mockSources = ['TechCrunch', 'MIT Technology Review', 'The Verge', 'Wired', 'Ars Technica', 'Forbes', 'Nature', 'Science'];
-const mockCategories = ['Tecnología', 'Investigación', 'Ciencia', 'Negocios', 'Salud', 'Educación'];
-const mockTags = ['IA', 'machine learning', 'investigación', 'algoritmos', 'tecnología', 'innovación', 'OpenAI', 'GPT', 'ética', 'startups', 'inversión', 'sesgos'];
+  if (typeof tags === 'string') {
+    return tags
+      .split(',')
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+  }
+
+  if (typeof tags === 'object') {
+    if ('tags' in tags && Array.isArray((tags as Record<string, unknown>).tags)) {
+      return (tags as { tags: unknown[] }).tags
+        .map((tag) => String(tag).trim())
+        .filter(Boolean);
+    }
+
+    return Object.values(tags)
+      .flat()
+      .map((tag) => String(tag).trim())
+      .filter(Boolean);
+  }
+
+  return [];
+};
+
+const ensureSentiment = (label?: string | null): 'positive' | 'negative' | 'neutral' => {
+  if (label === 'positive' || label === 'negative' || label === 'neutral') {
+    return label;
+  }
+  return 'neutral';
+};
+
+const toPercentage = (value?: number | null, fallback = 0): number => {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return fallback;
+  }
+
+  if (value <= 1 && value >= -1) {
+    return Math.round((value + 1) * 50); // map [-1,1] to [0,100]
+  }
+
+  return Math.round(Math.min(100, Math.max(0, value)));
+};
+
+const transformArticle = (article: ArticleDTO): NewsArticle => {
+  const tags = normalizeTags(article.topic_tags);
+  const publishedAt = article.published_at ?? article.created_at ?? new Date().toISOString();
+  const relevance = toPercentage(article.relevance_score);
+  const sentimentLabel = ensureSentiment(article.sentiment_label);
+
+  return {
+    id: article.id,
+    title: article.title || 'Artículo sin título',
+    content: article.content ?? '',
+    summary:
+      article.summary ??
+      (article.content ? `${article.content.slice(0, 240)}…` : 'Sin resumen disponible.'),
+    url: article.url,
+    source: article.source_name ?? 'Fuente desconocida',
+    author: undefined,
+    publishedAt,
+    imageUrl: undefined,
+    tags,
+    category: tags[0] ?? 'General',
+    aiMetadata: {
+      sentiment: sentimentLabel,
+      confidence: toPercentage(article.sentiment_score, 50),
+      keywords: tags,
+      entities: {
+        organization: article.source_name ? [article.source_name] : undefined,
+      },
+      relevanceScore: relevance,
+      topic: tags.length > 0 ? tags : ['General'],
+      readability: 72,
+      language: 'en',
+    },
+  };
+};
 
 const NewsExample: React.FC = () => {
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string>();
-  const [pagination, setPagination] = useState<PaginationInfo>({
-    page: 1,
-    limit: 20,
-    total: mockArticles.length,
-    totalPages: Math.ceil(mockArticles.length / 20),
-    hasNext: false,
-    hasPrevious: false,
-  });
+  const [pagination, setPagination] = useState<PaginationInfo>(EMPTY_PAGINATION);
   const [searchQuery, setSearchQuery] = useState('');
   const [filters, setFilters] = useState<NewsFilters>({});
   const [sortOption, setSortOption] = useState<SortOption>(DEFAULT_SORT_OPTIONS[0]);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-  const [suggestions] = useState<AutocompleteSuggestion[]>(mockSuggestions);
+  const [suggestions, setSuggestions] = useState<AutocompleteSuggestion[]>([]);
   const [filterPanelState, setFilterPanelState] = useState<FilterPanelState>({
     isOpen: false,
-    activeTab: 'date'
+    activeTab: 'date',
   });
+  const [availableSources, setAvailableSources] = useState<string[]>([]);
+  const [availableCategories, setAvailableCategories] = useState<string[]>([]);
+  const [availableTags, setAvailableTags] = useState<string[]>([]);
 
-  // Simular carga inicial
-  useEffect(() => {
-    setIsLoading(true);
-    setTimeout(() => {
-      setArticles(mockArticles);
-      setIsLoading(false);
-    }, 1500);
+  const updateDerivedCollections = useCallback((items: NewsArticle[]) => {
+    const sources = new Set<string>();
+    const categories = new Set<string>();
+    const tags = new Set<string>();
+    const suggestionsMap = new Map<string, AutocompleteSuggestion>();
+
+    items.forEach((item) => {
+      if (item.source) {
+        sources.add(item.source);
+        suggestionsMap.set(`source-${item.source}`, {
+          value: item.source,
+          label: item.source,
+          type: 'source',
+        });
+      }
+
+      if (item.category) {
+        categories.add(item.category);
+        suggestionsMap.set(`category-${item.category}`, {
+          value: item.category,
+          label: item.category,
+          type: 'category',
+        });
+      }
+
+      item.tags.forEach((tag) => {
+        tags.add(tag);
+        suggestionsMap.set(`tag-${tag}`, {
+          value: tag,
+          label: tag,
+          type: 'tag',
+        });
+      });
+
+      suggestionsMap.set(`keyword-${item.id}`, {
+        value: item.title,
+        label: item.title,
+        type: 'keyword',
+      });
+    });
+
+    setAvailableSources(Array.from(sources.values()).sort());
+    setAvailableCategories(Array.from(categories.values()).sort());
+    setAvailableTags(Array.from(tags.values()).sort());
+    setSuggestions(Array.from(suggestionsMap.values()).slice(0, 40));
   }, []);
 
-  // Filtrar artículos
-  const filteredArticles = articles.filter(article => {
-    // Filtro de búsqueda
-    if (searchQuery && !article.title.toLowerCase().includes(searchQuery.toLowerCase()) &&
-        !article.summary.toLowerCase().includes(searchQuery.toLowerCase()) &&
-        !article.tags.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase())) &&
-        !article.aiMetadata.keywords.some(keyword => keyword.toLowerCase().includes(searchQuery.toLowerCase()))) {
+  const fetchArticles = useCallback(
+    async ({
+      page = 1,
+      query,
+      append = false,
+    }: {
+      page?: number;
+      query?: string;
+      append?: boolean;
+    } = {}) => {
+      const effectiveQuery = query ?? searchQuery;
+      const pageSize = pagination.limit || DEFAULT_PAGE_SIZE;
+
+      if (append) {
+        setIsLoadingMore(true);
+      } else {
+        setIsLoading(true);
+      }
+      setError(undefined);
+
+      try {
+        let response;
+        if (effectiveQuery.trim().length > 0) {
+          response = await articleService.searchArticles(
+            effectiveQuery.trim(),
+            page,
+            pageSize,
+          );
+        } else {
+          response = await articleService.getArticles(page, pageSize);
+        }
+
+        const transformed = response.articles.map(transformArticle);
+
+        setArticles((prev) => {
+          const merged = append ? [...prev, ...transformed] : transformed;
+          updateDerivedCollections(merged);
+          return merged;
+        });
+
+        setPagination({
+          page: response.page,
+          limit: response.per_page,
+          total: response.total,
+          totalPages: response.pages,
+          hasNext: response.has_next,
+          hasPrevious: response.has_prev,
+        });
+      } catch (err) {
+        console.error('Error loading articles', err);
+        setError('No se pudieron cargar las noticias. Intenta nuevamente.');
+      } finally {
+        if (append) {
+          setIsLoadingMore(false);
+        } else {
+          setIsLoading(false);
+        }
+      }
+    },
+    [pagination.limit, searchQuery, updateDerivedCollections],
+  );
+
+  useEffect(() => {
+    void fetchArticles({ page: 1 });
+  }, [fetchArticles]);
+
+  const filteredArticles = articles.filter((article) => {
+    const query = searchQuery.trim().toLowerCase();
+    if (
+      query &&
+      !article.title.toLowerCase().includes(query) &&
+      !article.summary.toLowerCase().includes(query) &&
+      !article.tags.some((tag) => tag.toLowerCase().includes(query)) &&
+      !article.aiMetadata.keywords.some((keyword) => keyword.toLowerCase().includes(query))
+    ) {
       return false;
     }
 
-    // Filtros de sentimiento
-    if (filters.sentiment && filters.sentiment.length > 0) {
+    if (filters.sentiment?.length) {
       if (!filters.sentiment.includes(article.aiMetadata.sentiment)) {
         return false;
       }
     }
 
-    // Filtros de fuentes
-    if (filters.sources && filters.sources.length > 0) {
+    if (filters.sources?.length) {
       if (!filters.sources.includes(article.source)) {
         return false;
       }
     }
 
-    // Filtros de relevancia
     if (filters.relevanceRange) {
       const score = article.aiMetadata.relevanceScore;
-      if (score < filters.relevanceRange.min || score > filters.relevanceRange.max) {
+      if (
+        score < filters.relevanceRange.min ||
+        score > filters.relevanceRange.max
+      ) {
         return false;
       }
     }
 
-    // Filtros de categoría
-    if (filters.categories && filters.categories.length > 0) {
+    if (filters.categories?.length) {
       if (!filters.categories.includes(article.category)) {
         return false;
       }
     }
 
-    // Filtros de tags
-    if (filters.tags && filters.tags.length > 0) {
-      if (!filters.tags.some(tag => article.tags.includes(tag))) {
+    if (filters.tags?.length) {
+      if (!filters.tags.some((tag) => article.tags.includes(tag))) {
         return false;
       }
     }
 
-    // Filtros de idioma
-    if (filters.languages && filters.languages.length > 0) {
+    if (filters.languages?.length) {
       if (!filters.languages.includes(article.aiMetadata.language)) {
         return false;
       }
@@ -249,52 +298,33 @@ const NewsExample: React.FC = () => {
     return true;
   });
 
-  // Ordenar artículos
   const sortedArticles = [...filteredArticles].sort((a, b) => {
-    let aValue, bValue;
-    
+    const direction = sortOption.direction === 'asc' ? 1 : -1;
+
     switch (sortOption.field) {
       case 'publishedAt':
-        aValue = new Date(a.publishedAt);
-        bValue = new Date(b.publishedAt);
-        break;
+        return (
+          (new Date(a.publishedAt).getTime() - new Date(b.publishedAt).getTime()) *
+          direction
+        );
       case 'relevanceScore':
-        aValue = a.aiMetadata.relevanceScore;
-        bValue = b.aiMetadata.relevanceScore;
-        break;
+        return (a.aiMetadata.relevanceScore - b.aiMetadata.relevanceScore) * direction;
       case 'title':
-        aValue = a.title;
-        bValue = b.title;
-        break;
+        return a.title.localeCompare(b.title) * direction;
       case 'source':
-        aValue = a.source;
-        bValue = b.source;
-        break;
+        return a.source.localeCompare(b.source) * direction;
       default:
         return 0;
     }
-
-    if (aValue < bValue) return sortOption.direction === 'asc' ? -1 : 1;
-    if (aValue > bValue) return sortOption.direction === 'asc' ? 1 : -1;
-    return 0;
   });
 
-  const handleSearchSubmit = useCallback((query: string) => {
-    setSearchQuery(query);
-    setIsLoading(true);
-    
-    // Simular búsqueda con delay
-    setTimeout(() => {
-      setIsLoading(false);
-      setPagination(prev => ({
-        ...prev,
-        total: sortedArticles.length,
-        totalPages: Math.ceil(sortedArticles.length / prev.limit),
-        hasNext: sortedArticles.length > prev.limit,
-        hasPrevious: prev.page > 1,
-      }));
-    }, 800);
-  }, [sortedArticles.length]);
+  const handleSearchSubmit = useCallback(
+    (query: string) => {
+      setSearchQuery(query);
+      void fetchArticles({ page: 1, query });
+    },
+    [fetchArticles],
+  );
 
   const handleFiltersChange = useCallback((newFilters: NewsFilters) => {
     setFilters(newFilters);
@@ -304,141 +334,71 @@ const NewsExample: React.FC = () => {
     setSortOption(newSort);
   }, []);
 
-  const handleSuggestionSelect = useCallback((suggestion: AutocompleteSuggestion) => {
-    if (suggestion.type === 'keyword' || suggestion.type === 'source' || suggestion.type === 'category') {
-      setSearchQuery(suggestion.value);
-    }
-  }, []);
+  const handleSuggestionSelect = useCallback(
+    (suggestion: AutocompleteSuggestion) => {
+      const value = suggestion.value;
+      setSearchQuery(value);
+      void fetchArticles({ page: 1, query: value });
+    },
+    [fetchArticles],
+  );
 
   const handleLoadMore = useCallback(() => {
-    if (pagination.hasNext) {
-      setIsLoading(true);
-      setTimeout(() => {
-        const moreArticles = mockArticles.map((article, index) => ({
-          ...article,
-          id: `${article.id}-${Date.now()}-${index}`
-        }));
-        setArticles(prev => [...prev, ...moreArticles]);
-        setPagination(prev => ({
-          ...prev,
-          total: prev.total + moreArticles.length,
-          hasNext: prev.page < 3 // Simular que hay máximo 3 páginas
-        }));
-        setIsLoading(false);
-      }, 1000);
+    if (!pagination.hasNext || isLoading || isLoadingMore) {
+      return;
     }
-  }, [pagination.hasNext]);
+
+    void fetchArticles({
+      page: pagination.page + 1,
+      query: searchQuery,
+      append: true,
+    });
+  }, [fetchArticles, pagination.hasNext, pagination.page, searchQuery, isLoading, isLoadingMore]);
 
   const handleRefresh = useCallback(() => {
-    setIsLoading(true);
-    setError(undefined);
-    setTimeout(() => {
-      setArticles([...mockArticles]);
-      setIsLoading(false);
-    }, 1000);
-  }, []);
+    return fetchArticles({ page: 1, query: searchQuery });
+  }, [fetchArticles, searchQuery]);
 
   const handleArticleClick = useCallback((article: NewsArticle) => {
-    console.log('Artículo clickeado:', article);
-    // Aquí puedes manejar el clic en el artículo
-    window.open(article.url, '_blank');
+    window.open(article.url, '_blank', 'noopener,noreferrer');
   }, []);
 
-  // Manejar errores simulados
-  const simulateError = useCallback(() => {
-    setError('Error simulado: No se pudieron cargar las noticias');
-  }, []);
-
-  // Limpiar filtros
   const handleClearFilters = useCallback(() => {
     setFilters({});
     setSearchQuery('');
-  }, []);
+    void fetchArticles({ page: 1, query: '' });
+  }, [fetchArticles]);
 
   return (
     <ErrorBoundary>
-      <div className="h-screen bg-gray-50">
-        {/* Header */}
+      <div className="min-h-screen bg-gray-50">
         <div className="bg-white border-b">
-          <div className="max-w-7xl mx-auto px-4 py-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">
-                  🧠 Noticias de Inteligencia Artificial
-                </h1>
-                <p className="text-gray-600 mt-1">
-                  Descubre las últimas noticias sobre IA con filtros avanzados y metadatos inteligentes
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={simulateError}
-                  className="px-3 py-1 text-xs bg-red-100 text-red-700 rounded-md hover:bg-red-200"
-                >
-                  Simular Error
-                </button>
-                <button
-                  onClick={handleClearFilters}
-                  className="px-3 py-1 text-xs bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200"
-                >
-                  Limpiar Filtros
-                </button>
-              </div>
+          <div className="max-w-7xl mx-auto px-4 py-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">
+                🧠 Noticias de Inteligencia Artificial
+              </h1>
+              <p className="text-gray-600 mt-1">
+                Fuentes reales conectadas al backend. Usa la búsqueda y los filtros para explorar.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => void handleRefresh()}
+                className="px-3 py-1 text-sm rounded-md bg-gray-900 text-white hover:bg-gray-800 transition"
+              >
+                Actualizar
+              </button>
+              <button
+                onClick={handleClearFilters}
+                className="px-3 py-1 text-sm rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 transition"
+              >
+                Limpiar filtros
+              </button>
             </div>
           </div>
         </div>
 
-        {/* Demo de componentes individuales */}
-        <div className="max-w-7xl mx-auto px-4 py-6 space-y-8">
-          {/* NewsFilters en modo compacto */}
-          <div className="bg-white p-4 rounded-lg border">
-            <h3 className="text-lg font-semibold mb-4">Componente NewsFilters (Compact)</h3>
-            <NewsFilters
-              filters={filters}
-              onFiltersChange={handleFiltersChange}
-              availableSources={mockSources}
-              availableCategories={mockCategories}
-              availableTags={mockTags}
-              compact={true}
-              onReset={handleClearFilters}
-            />
-          </div>
-
-          {/* LoadingSkeleton */}
-          <div className="bg-white p-4 rounded-lg border">
-            <h3 className="text-lg font-semibold mb-4">LoadingSkeleton</h3>
-            <LoadingSkeleton 
-              count={3} 
-              viewMode="grid" 
-              showFilters={true} 
-            />
-          </div>
-
-          {/* ErrorState examples */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-white p-4 rounded-lg border">
-              <h3 className="text-lg font-semibold mb-4">ErrorState (Network)</h3>
-              <ErrorState
-                type="network"
-                title="Sin conexión"
-                message="No se puede conectar con el servidor"
-                onRetry={handleRefresh}
-                variant="card"
-              />
-            </div>
-            <div className="bg-white p-4 rounded-lg border">
-              <h3 className="text-lg font-semibold mb-4">EmptyState</h3>
-              <EmptyState
-                title="No hay resultados"
-                message="Intenta ajustar tus filtros o términos de búsqueda"
-                onClearFilters={handleClearFilters}
-                actionLabel="Explorar todas las noticias"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Lista principal de noticias */}
         <NewsList
           articles={sortedArticles}
           isLoading={isLoading}
@@ -457,18 +417,24 @@ const NewsExample: React.FC = () => {
           onSortChange={handleSortChange}
           filterPanelState={filterPanelState}
           onFilterPanelStateChange={setFilterPanelState}
-          availableSources={mockSources}
-          availableCategories={mockCategories}
-          availableTags={mockTags}
+          availableSources={availableSources}
+          availableCategories={availableCategories}
+          availableTags={availableTags}
           onLoadMore={handleLoadMore}
           onRefresh={handleRefresh}
           onArticleClick={handleArticleClick}
-          enableInfiniteScroll={true}
+          enableInfiniteScroll={pagination.hasNext}
           enableFilters={true}
           enableSearch={true}
           enableSort={true}
-          className="h-[calc(100vh-400px)]"
+          className="max-w-7xl mx-auto px-4 py-6"
         />
+
+        {isLoadingMore && (
+          <div className="text-center text-sm text-gray-500 pb-6">
+            Cargando más artículos…
+          </div>
+        )}
       </div>
     </ErrorBoundary>
   );

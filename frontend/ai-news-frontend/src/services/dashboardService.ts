@@ -1,11 +1,10 @@
 import { DashboardMetrics, LiveStats } from '../types/dashboard';
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+import { buildApiUrl } from '../config/api';
 
 class DashboardService {
   private async fetchAPI<T>(endpoint: string): Promise<T> {
     try {
-      const response = await fetch(`${API_BASE_URL}${endpoint}`);
+      const response = await fetch(buildApiUrl(endpoint));
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }

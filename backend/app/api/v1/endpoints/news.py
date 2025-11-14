@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
 from typing import List, Optional, Dict, Any
-from sqlalchemy.orm import Session
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 import logging
 import math
 from app.services import news_service
@@ -8,9 +10,7 @@ from app.db.models import Article, Source
 from app.db.database import get_db
 from app.core.config import get_settings
 from app.utils.pagination import (
-    get_pagination_params, 
-    paginate_response, 
-    pagination_service,
+    get_pagination_params,
     PaginationParams
 )
 
@@ -26,10 +26,10 @@ MODEL_MAPPING = {
     '/api/v1/news/categories': 'trending_topic',
 }
 
-@router.get("/news/latest")
+@router.get("/latest")
 async def get_latest_news(
     request: Request,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     # Parámetros legacy para compatibilidad
     limit: Optional[int] = None,
     sources: Optional[List[str]] = None
@@ -71,16 +71,15 @@ async def get_latest_news(
         else:
             # Fallback manual si middleware no está disponible
             pagination_params = get_pagination_params(request, 'article')
-        
+
         # Si no hay API keys configuradas, usar datos de ejemplo
         api_keys_configured = (
-            settings.NEWSAPI_KEY != "your_newsapi_key_here" and
-            settings.GUARDIAN_API_KEY != "your_guardian_api_key_here" and
-            settings.NYTIMES_API_KEY != "your_nytimes_api_key_here"
+            settings.NEWSAPI_KEY and settings.NEWSAPI_KEY != "your_newsapi_key_here" and
+            settings.GUARDIAN_API_KEY and settings.GUARDIAN_API_KEY != "your_guardian_api_key_here" and
+            settings.NYTIMES_API_KEY and settings.NYTIMES_API_KEY != "your_nytimes_api_key_here"
         )
-        
+
         if not api_keys_configured:
-            # Datos de ejemplo con paginación
             sample_articles = [
                 {
                     "id": "sample-1",
@@ -100,7 +99,7 @@ async def get_latest_news(
                     "title": "Machine Learning en la Medicina",
                     "description": "Cómo el ML está revolucionando el diagnóstico médico.",
                     "url": "https://example.com/ml-medicine",
-                    "source_id": "sample-source-2", 
+                    "source_id": "sample-source-2",
                     "published_at": "2025-11-06T01:30:00Z",
                     "sentiment_label": "positive",
                     "sentiment_score": 0.7,
@@ -122,60 +121,47 @@ async def get_latest_news(
                     "processing_status": "completed"
                 }
             ]
-            
-        # Aplicar filtros de ejemplo si existen
-        filtered_articles = _apply_sample_filters(sample_articles, pagination_params)
-        
-        # Simular paginación
-        start_idx = (pagination_params.page - 1) * pagination_params.page_size
-        end_idx = start_idx + pagination_params.page_size
-        paginated_articles = filtered_articles[start_idx:end_idx]
-        
-        result = {
+            return _build_sample_paginated_response(sample_articles, pagination_params)
+
+        # Con API keys configuradas, obtenemos los artículos reales desde la base de datos
+        page = pagination_params.page
+        page_size = pagination_params.page_size
+
+        total_result = await db.execute(select(func.count()).select_from(Article))
+        total_articles = total_result.scalar() or 0
+
+        stmt = (
+            select(Article)
+            .options(selectinload(Article.source))
+            .order_by(Article.published_at.desc(), Article.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+
+        result = await db.execute(stmt)
+        articles = result.scalars().all()
+
+        serialized_articles = [_serialize_article(article) for article in articles]
+
+        total_pages = math.ceil(total_articles / page_size) if page_size else 0
+
+        return {
             'status': 'success',
-            'data': paginated_articles,
+            'data': serialized_articles,
             'pagination': {
-                'total': len(filtered_articles),
-                'page': pagination_params.page,
-                'page_size': pagination_params.page_size,
-                'total_pages': math.ceil(len(filtered_articles) / pagination_params.page_size),
-                'has_next': end_idx < len(filtered_articles),
-                'has_prev': pagination_params.page > 1,
-                'next_cursor': f"page_{pagination_params.page + 1}" if end_idx < len(filtered_articles) else None,
-                'prev_cursor': f"page_{pagination_params.page - 1}" if pagination_params.page > 1 else None
+                'total': total_articles,
+                'page': page,
+                'page_size': page_size,
+                'total_pages': total_pages,
+                'has_next': page < total_pages,
+                'has_prev': page > 1,
+                'next_cursor': f"page_{page + 1}" if page < total_pages else None,
+                'prev_cursor': f"page_{page - 1}" if page > 1 else None
             },
             'filters_applied': pagination_params.filters,
-            'sort_applied': [{'field': s.field, 'order': s.order.value} for s in pagination_params.sort]
+            'sort_applied': [{'field': s.field, 'order': s.order.value} for s in pagination_params.sort],
+            'message': f"Successfully fetched {len(serialized_articles)} articles"
         }
-        
-        return result
-        
-        # Para datos reales, usar el service layer con filtros adicionales
-        additional_filters = _convert_pagination_filters_to_service(pagination_params)
-        
-        # Nota: Aquí se integraría con la base de datos real
-        # Por ahora devolvemos una respuesta estructurada
-        articles = await news_service.get_latest_news(
-            limit=pagination_params.limit,
-            sources=sources
-        )
-        
-        # La paginación real se haría aquí con la base de datos
-        result = {
-            'status': 'success',
-            'data': articles,
-            'pagination': {
-                'total': len(articles),
-                'page': pagination_params.page,
-                'page_size': pagination_params.page_size,
-                'total_pages': math.ceil(len(articles) / pagination_params.page_size),
-                'has_next': pagination_params.page * pagination_params.page_size < len(articles),
-                'has_prev': pagination_params.page > 1
-            },
-            'message': f'Successfully fetched {len(articles)} articles'
-        }
-        
-        return result
         
     except Exception as e:
         logger.error(f"Error in get_latest_news: {str(e)}")
@@ -216,6 +202,57 @@ def _apply_sample_filters(articles: List[Dict], pagination_params: PaginationPar
     return filtered
 
 
+def _build_sample_paginated_response(articles: List[Dict], pagination_params: PaginationParams) -> Dict[str, Any]:
+    """Construir una respuesta paginada usando datos de ejemplo"""
+    filtered_articles = _apply_sample_filters(articles, pagination_params)
+    
+    start_idx = (pagination_params.page - 1) * pagination_params.page_size
+    end_idx = start_idx + pagination_params.page_size
+    paginated_articles = filtered_articles[start_idx:end_idx]
+    
+    return {
+        'status': 'success',
+        'data': paginated_articles,
+        'pagination': {
+            'total': len(filtered_articles),
+            'page': pagination_params.page,
+            'page_size': pagination_params.page_size,
+            'total_pages': math.ceil(len(filtered_articles) / pagination_params.page_size) if pagination_params.page_size else 0,
+            'has_next': end_idx < len(filtered_articles),
+            'has_prev': pagination_params.page > 1,
+            'next_cursor': f"page_{pagination_params.page + 1}" if end_idx < len(filtered_articles) else None,
+            'prev_cursor': f"page_{pagination_params.page - 1}" if pagination_params.page > 1 else None
+        },
+        'filters_applied': pagination_params.filters,
+        'sort_applied': [{'field': s.field, 'order': s.order.value} for s in pagination_params.sort]
+    }
+
+
+def _serialize_article(article: Article) -> Dict[str, Any]:
+    """Serializar instancia de Article a formato dict estándar"""
+    return {
+        'id': str(article.id),
+        'title': article.title,
+        'content': article.content,
+        'summary': article.summary,
+        'url': article.url,
+        'published_at': article.published_at.isoformat() if article.published_at else None,
+        'source_id': str(article.source_id) if article.source_id else None,
+        'source_name': article.source.name if article.source else None,
+        'source_url': article.source.url if article.source else None,
+        'sentiment_score': article.sentiment_score,
+        'sentiment_label': article.sentiment_label,
+        'bias_score': article.bias_score,
+        'topic_tags': article.topic_tags or [],
+        'relevance_score': article.relevance_score,
+        'processed_at': article.processed_at.isoformat() if article.processed_at else None,
+        'ai_processed_at': article.ai_processed_at.isoformat() if article.ai_processed_at else None,
+        'processing_status': article.processing_status,
+        'created_at': article.created_at.isoformat() if article.created_at else None,
+        'updated_at': article.updated_at.isoformat() if article.updated_at else None,
+    }
+
+
 def _convert_pagination_filters_to_service(pagination_params: PaginationParams) -> Dict[str, Any]:
     """Convertir filtros de paginación a formato del service layer"""
     filters = {}
@@ -229,7 +266,7 @@ def _convert_pagination_filters_to_service(pagination_params: PaginationParams) 
     
     return filters
 
-@router.get("/news/search")
+@router.get("/search")
 async def search_news(
     query: str,
     limit: Optional[int] = 10,
@@ -260,7 +297,7 @@ async def search_news(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error searching news: {str(e)}")
 
-@router.get("/news/sources")
+@router.get("/sources")
 async def get_news_sources():
     """
     Obtener lista de fuentes de noticias disponibles
@@ -277,7 +314,7 @@ async def get_news_sources():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching sources: {str(e)}")
 
-@router.get("/news/categories")
+@router.get("/categories")
 async def get_news_categories():
     """
     Obtener categorías de noticias disponibles
@@ -294,7 +331,7 @@ async def get_news_categories():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching categories: {str(e)}")
 
-@router.get("/news/health")
+@router.get("/health")
 async def news_health_check():
     """
     Health check del servicio de noticias
@@ -315,7 +352,7 @@ async def news_health_check():
             "error": str(e)
         }
 
-@router.get("/news/stats")
+@router.get("/stats")
 async def get_news_stats():
     """
     Obtener estadísticas del servicio de noticias
@@ -335,10 +372,9 @@ async def get_news_stats():
 
 # ===== NUEVOS ENDPOINTS CON PAGINACIÓN AVANZADA =====
 
-@router.get("/news/advanced")
+@router.get("/advanced")
 async def get_news_advanced(
     request: Request,
-    db: Session = Depends(get_db)
 ):
     """
     Endpoint avanzado para noticias con paginación y filtrado completo
@@ -388,10 +424,9 @@ async def get_news_advanced(
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-@router.get("/news/sources/advanced")
+@router.get("/sources/advanced")
 async def get_sources_advanced(
     request: Request,
-    db: Session = Depends(get_db)
 ):
     """
     Fuentes de noticias con paginación avanzada
@@ -421,7 +456,7 @@ async def get_sources_advanced(
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-@router.get("/news/analytics/pagination-metrics")
+@router.get("/analytics/pagination-metrics")
 async def get_pagination_metrics():
     """
     Obtener métricas de uso de paginación
@@ -466,7 +501,7 @@ async def get_pagination_metrics():
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-@router.get("/news/filter-presets")
+@router.get("/filter-presets")
 async def get_filter_presets():
     """
     Obtener presets de filtros predefinidos para facilitar el uso

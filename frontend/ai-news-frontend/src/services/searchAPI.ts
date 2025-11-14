@@ -4,6 +4,7 @@ import {
   SearchFilters,
   SortOption,
 } from '../components/search/types';
+import { buildApiUrl } from '../config/api';
 
 interface SearchRequest {
   query: string;
@@ -26,8 +27,6 @@ interface SearchResponse {
 }
 
 class SearchAPIService {
-  private baseURL = 'http://localhost:8000/api/v1';
-
   async search(params: SearchRequest): Promise<SearchResponse> {
     const { query, filters, page, sortBy, signal } = params;
     
@@ -39,7 +38,7 @@ class SearchAPIService {
     });
 
     try {
-      const response = await fetch(`${this.baseURL}/search?${searchParams}`, {
+      const response = await fetch(buildApiUrl(`/search?${searchParams}`), {
         signal,
         headers: {
           'Content-Type': 'application/json',
@@ -73,7 +72,9 @@ class SearchAPIService {
     if (query.length < 2) return [];
 
     try {
-      const response = await fetch(`${this.baseURL}/search/suggestions?q=${encodeURIComponent(query)}`);
+      const response = await fetch(
+        buildApiUrl(`/search/suggestions?q=${encodeURIComponent(query)}`)
+      );
       
       if (!response.ok) {
         throw new Error('Suggestions request failed');
@@ -89,7 +90,7 @@ class SearchAPIService {
 
   async getTrendingSearches(): Promise<SearchSuggestion[]> {
     try {
-      const response = await fetch(`${this.baseURL}/search/trending`);
+      const response = await fetch(buildApiUrl('/search/trending'));
       
       if (!response.ok) {
         throw new Error('Trending searches request failed');
