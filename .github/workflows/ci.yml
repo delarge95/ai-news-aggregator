@@ -1,0 +1,404 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE_NAME: ${{ github.repository }}-backend
+  FRONTEND_IMAGE_NAME: ${{ github.repository }}-frontend
+
+jobs:
+  # Job 1: Code Quality and Security Checks
+  code-quality:
+    name: 🔍 Code Quality & Security
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 black isort mypy safety bandit
+
+      - name: 🔍 Lint with flake8
+        run: |
+          cd backend
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: 🎨 Check code formatting with black
+        run: |
+          cd backend
+          black --check --diff .
+
+      - name: 📊 Check import sorting with isort
+        run: |
+          cd backend
+          isort --check-only --diff .
+
+      - name: 🔒 Type checking with mypy
+        run: |
+          cd backend
+          mypy app --ignore-missing-imports
+
+      - name: 🛡️ Security scan with bandit
+        run: |
+          cd backend
+          bandit -r . -f json -o bandit-report.json || true
+          bandit -r .
+
+      - name: 🔐 Dependencies vulnerability scan
+        run: |
+          cd backend
+          safety check --json --output safety-report.json || true
+          safety check
+
+  # Job 2: Backend Tests
+  backend-tests:
+    name: 🧪 Backend Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: ai_news_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-dev.txt
+
+      - name: 🔄 Wait for services
+        run: |
+          timeout 30 bash -c 'until nc -z localhost 5432; do sleep 1; done'
+          timeout 30 bash -c 'until nc -z localhost 6379; do sleep 1; done'
+
+      - name: 🧪 Run tests
+        run: |
+          cd backend
+          # Run tests with timeout and parallel execution
+          pytest tests/ \
+            --timeout=30 \
+            --timeout-method=thread \
+            -n auto \
+            --maxfail=5 \
+            --tb=short \
+            --cov=app \
+            --cov-report=xml \
+            --cov-report=html \
+            --junitxml=test-results.xml \
+            -v \
+            || true
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/ai_news_db
+          REDIS_URL: redis://localhost:6379
+          TESTING: true
+        timeout-minutes: 10
+
+      - name: 📊 Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: backend/coverage.xml
+          flags: backend
+          name: backend-coverage
+          fail_ci_if_error: false
+
+      - name: 📁 Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: backend-test-results
+          path: |
+            backend/test-results/
+            backend/htmlcov/
+            backend/coverage.xml
+
+  # Job 3: Frontend Tests
+  frontend-tests:
+    name: ⚛️ Frontend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: frontend/ai-news-frontend/package-lock.json
+
+      - name: 📦 Install pnpm
+        run: npm install -g pnpm
+
+      - name: 📦 Install dependencies
+        run: |
+          cd frontend/ai-news-frontend
+          pnpm install
+
+      - name: 🎨 Lint with ESLint
+        run: |
+          cd frontend/ai-news-frontend
+          pnpm run lint
+
+      - name: 🧪 Type check with TypeScript
+        run: |
+          cd frontend/ai-news-frontend
+          pnpm run type-check
+
+      - name: 🧪 Run unit tests with Vitest
+        run: |
+          cd frontend/ai-news-frontend
+          pnpm run test:unit --coverage
+
+      - name: 🎭 Run E2E tests with Playwright
+        run: |
+          cd frontend/ai-news-frontend
+          pnpm run test:e2e || true
+        env:
+          CI: true
+
+      - name: 📁 Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: frontend-test-results
+          path: |
+            frontend/ai-news-frontend/test-results/
+            frontend/ai-news-frontend/coverage/
+
+  # Job 4: End-to-End Tests
+  e2e-tests:
+    name: 🎭 End-to-End Tests
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-tests]
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: ai_news_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: frontend/ai-news-frontend/package-lock.json
+
+      - name: 📦 Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: 📦 Install pnpm
+        run: npm install -g pnpm
+
+      - name: 📦 Install frontend dependencies
+        run: |
+          cd frontend/ai-news-frontend
+          pnpm install
+
+      - name: 🐳 Build and start services
+        run: |
+          docker-compose up -d postgres redis
+          timeout 30 bash -c 'until nc -z localhost 5432; do sleep 1; done'
+          timeout 30 bash -c 'until nc -z localhost 6379; do sleep 1; done'
+
+      - name: 🔄 Run database migrations
+        run: |
+          cd backend
+          alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/ai_news_db
+
+      - name: 🚀 Start backend
+        run: |
+          cd backend
+          python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+          timeout 30 bash -c 'until curl -f http://localhost:8000/health; do sleep 1; done'
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/ai_news_db
+          REDIS_URL: redis://localhost:6379
+
+      - name: ⚛️ Build and start frontend
+        run: |
+          cd frontend/ai-news-frontend
+          pnpm run build
+          pnpm run preview &
+          timeout 30 bash -c 'until curl -f http://localhost:4173; do sleep 1; done'
+
+      - name: 🧪 Run E2E tests
+        run: |
+          cd frontend/ai-news-frontend
+          pnpm run test:e2e:full || true
+        env:
+          VITE_API_URL: http://localhost:8000/api/v1
+
+      - name: 📁 Upload E2E test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: e2e-test-results
+          path: |
+            frontend/ai-news-frontend/test-results/
+            frontend/ai-news-frontend/playwright-report/
+
+      - name: 🧹 Cleanup
+        if: always()
+        run: |
+          docker-compose down -v
+          docker system prune -f
+
+  # Job 5: Performance Tests
+  performance-tests:
+    name: ⚡ Performance Tests
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install dependencies
+        run: |
+          pip install locust pytest-benchmark
+          pip install -r backend/requirements.txt
+
+      - name: 🏃 Run performance tests
+        run: |
+          cd backend
+          pytest tests/performance/ -v --benchmark-only || true
+
+  # Job 6: Container Build Test
+  build-test:
+    name: 📦 Container Build Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐳 Build backend image
+        run: |
+          docker build -t test-backend:latest ./backend
+
+      - name: 🐳 Build frontend image
+        run: |
+          docker build -t test-frontend:latest ./frontend/ai-news-frontend
+
+      - name: 🔍 Test backend image
+        run: |
+          docker run --rm -d --name test-backend-container test-backend:latest
+          sleep 10
+          docker exec test-backend-container curl -f http://localhost:8000/health || exit 1
+          docker stop test-backend-container
+
+      - name: 📁 Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: container-build-artifacts
+          path: |
+            backend/Dockerfile
+            frontend/ai-news-frontend/Dockerfile
+
+  # Job 7: Notification
+  notify-success:
+    name: ✅ CI Success Notification
+    runs-on: ubuntu-latest
+    needs: [code-quality, backend-tests, frontend-tests, e2e-tests, build-test]
+    if: success() && github.event_name == 'push'
+    steps:
+      - name: 📤 Send success notification
+        run: |
+          echo "✅ CI Pipeline completed successfully!"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Repository: ${{ github.repository }}"
+
+  notify-failure:
+    name: ❌ CI Failure Notification
+    runs-on: ubuntu-latest
+    needs: [code-quality, backend-tests, frontend-tests, e2e-tests, build-test]
+    if: failure() && github.event_name == 'push'
+    steps:
+      - name: 📤 Send failure notification
+        run: |
+          echo "❌ CI Pipeline failed!"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Failed jobs: ${{ needs.*.result }}"

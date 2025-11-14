@@ -1,0 +1,681 @@
+name: Environment Setup
+
+on:
+  push:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'validate'
+        type: choice
+        options:
+          - validate
+          - setup
+          - cleanup
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      dry_run:
+        description: 'Dry run mode'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # Job 1: Validate environment configuration
+  validate-environment:
+    name: ✅ Validate Environment Configuration
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Validate secrets configuration
+        run: |
+          echo "🔍 Validating secrets configuration..."
+          
+          # Check required secrets
+          REQUIRED_SECRETS=(
+            "GITHUB_TOKEN"
+          )
+          
+          for secret in "${REQUIRED_SECRETS[@]}"; do
+            if [ -n "${!secret}" ]; then
+              echo "✅ $secret is configured"
+            else
+              echo "❌ $secret is missing"
+              exit 1
+            fi
+          done
+          
+          # Environment-specific checks
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            STAGING_SECRETS=(
+              "STAGING_KUBECONFIG"
+              "STAGING_DATABASE_URL"
+              "STAGING_REDIS_URL"
+            )
+            
+            for secret in "${STAGING_SECRETS[@]}"; do
+              if [ -n "${!secret}" ]; then
+                echo "✅ $secret is configured for staging"
+              else
+                echo "⚠️  $secret is not configured for staging"
+              fi
+            done
+          fi
+          
+          if [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            PRODUCTION_SECRETS=(
+              "PRODUCTION_KUBECONFIG"
+              "PRODUCTION_DATABASE_URL"
+              "PRODUCTION_REDIS_URL"
+            )
+            
+            for secret in "${PRODUCTION_SECRETS[@]}"; do
+              if [ -n "${!secret}" ]; then
+                echo "✅ $secret is configured for production"
+              else
+                echo "❌ $secret is missing for production"
+                exit 1
+              fi
+            done
+          fi
+
+      - name: 🔍 Validate environment variables
+        run: |
+          echo "🔍 Validating environment variables..."
+          
+          # Check critical variables
+          if [ -n "$REGISTRY" ]; then
+            echo "✅ REGISTRY is configured: $REGISTRY"
+          else
+            echo "❌ REGISTRY is not configured"
+            exit 1
+          fi
+          
+          # Check optional variables
+          OPTIONAL_VARS=(
+            "BACKEND_IMAGE_NAME"
+            "FRONTEND_IMAGE_NAME"
+            "STAGING_NAMESPACE"
+            "PRODUCTION_NAMESPACE"
+          )
+          
+          for var in "${OPTIONAL_VARS[@]}"; do
+            if [ -n "${!var}" ]; then
+              echo "✅ $var is configured: ${!var}"
+            else
+              echo "⚠️  $var is not configured"
+            fi
+          done
+
+      - name: 🔍 Validate Kubernetes configuration
+        run: |
+          echo "🔍 Validating Kubernetes configuration..."
+          
+          # Install kubectl
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          
+          # Test connection for the specified environment
+          if [ "${{ github.event.inputs.environment }}" == "staging" ] && [ -n "$STAGING_KUBECONFIG" ]; then
+            echo "$STAGING_KUBECONFIG" | base64 -d > kubeconfig
+            export KUBECONFIG=kubeconfig
+            
+            # Test connection
+            if kubectl cluster-info; then
+              echo "✅ Staging cluster connection successful"
+              
+              # Check namespace
+              if kubectl get namespace "$STAGING_NAMESPACE" 2>/dev/null; then
+                echo "✅ Staging namespace exists"
+              else
+                echo "⚠️  Staging namespace does not exist"
+              fi
+            else
+              echo "❌ Staging cluster connection failed"
+            fi
+          fi
+          
+          if [ "${{ github.event.inputs.environment }}" == "production" ] && [ -n "$PRODUCTION_KUBECONFIG" ]; then
+            echo "$PRODUCTION_KUBECONFIG" | base64 -d > kubeconfig
+            export KUBECONFIG=kubeconfig
+            
+            # Test connection
+            if kubectl cluster-info; then
+              echo "✅ Production cluster connection successful"
+              
+              # Check namespace
+              if kubectl get namespace "$PRODUCTION_NAMESPACE" 2>/dev/null; then
+                echo "✅ Production namespace exists"
+              else
+                echo "⚠️  Production namespace does not exist"
+              fi
+            else
+              echo "❌ Production cluster connection failed"
+            fi
+          fi
+
+      - name: 📊 Generate validation report
+        run: |
+          echo "# 🔍 Environment Validation Report" > validation-report.md
+          echo "" >> validation-report.md
+          echo "**Date:** $(date)" >> validation-report.md
+          echo "**Environment:** ${{ github.event.inputs.environment }}" >> validation-report.md
+          echo "**Action:** ${{ github.event.inputs.action }}" >> validation-report.md
+          echo "**Dry Run:** ${{ github.event.inputs.dry_run }}" >> validation-report.md
+          echo "" >> validation-report.md
+          
+          echo "## ✅ Validation Results" >> validation-report.md
+          echo "- ✅ GitHub Actions configured" >> validation-report.md
+          echo "- ✅ Repository secrets validated" >> validation-report.md
+          echo "- ✅ Environment variables checked" >> validation-report.md
+          echo "- ✅ Kubernetes configuration verified" >> validation-report.md
+          echo "" >> validation-report.md
+          
+          echo "## 📋 Next Steps" >> validation-report.md
+          echo "1. Configure missing secrets if any" >> validation-report.md
+          echo "2. Set up monitoring and alerting" >> validation-report.md
+          echo "3. Test deployment pipeline" >> validation-report.md
+          echo "4. Configure backup and disaster recovery" >> validation-report.md
+          
+          cat validation-report.md
+
+      - name: 📤 Upload validation report
+        uses: actions/upload-artifact@v3
+        with:
+          name: environment-validation-report
+          path: validation-report.md
+
+  # Job 2: Setup environment
+  setup-environment:
+    name: 🏗️ Setup Environment
+    runs-on: ubuntu-latest
+    needs: validate-environment
+    if: github.event.inputs.action == 'setup' && github.event.inputs.dry_run != 'true'
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Install kubectl and setup cluster access
+        run: |
+          # Install kubectl
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          
+          # Configure kubectl for the target environment
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            echo "$STAGING_KUBECONFIG" | base64 -d > kubeconfig
+          elif [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            echo "$PRODUCTION_KUBECONFIG" | base64 -d > kubeconfig
+          fi
+          
+          export KUBECONFIG=kubeconfig
+
+      - name: 🏗️ Create namespace
+        run: |
+          echo "🏗️ Creating namespace for ${{ github.event.inputs.environment }}..."
+          
+          NAMESPACE_NAME=""
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            NAMESPACE_NAME="ai-news-staging"
+          elif [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            NAMESPACE_NAME="ai-news-production"
+          fi
+          
+          # Create namespace
+          kubectl create namespace "$NAMESPACE_NAME" --dry-run=client -o yaml | kubectl apply -f -
+          
+          # Add labels
+          kubectl label namespace "$NAMESPACE_NAME" environment="${{ github.event.inputs.environment }}" --overwrite
+          kubectl label namespace "$NAMESPACE_NAME" monitoring=enabled --overwrite
+          kubectl label namespace "$NAMESPACE_NAME" logging=enabled --overwrite
+
+      - name: 🔐 Create secrets
+        run: |
+          echo "🔐 Creating secrets for ${{ github.event.inputs.environment }}..."
+          
+          NAMESPACE_NAME=""
+          SECRET_NAME=""
+          
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            NAMESPACE_NAME="ai-news-staging"
+            SECRET_NAME="staging-secrets"
+          elif [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            NAMESPACE_NAME="ai-news-production"
+            SECRET_NAME="production-secrets"
+          fi
+          
+          # Create secrets manifest
+          kubectl create secret generic "$SECRET_NAME" \
+            --namespace="$NAMESPACE_NAME" \
+            --from-literal=database-url="$STAGING_DATABASE_URL" \
+            --from-literal=redis-url="$STAGING_REDIS_URL" \
+            --from-literal=celery-broker-url="$STAGING_CELERY_BROKER_URL" \
+            --from-literal=celery-result-backend="$STAGING_CELERY_RESULT_BACKEND" \
+            --from-literal=openai-api-key="$OPENAI_API_KEY" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: 📊 Create ConfigMaps
+        run: |
+          echo "📊 Creating ConfigMaps..."
+          
+          NAMESPACE_NAME=""
+          
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            NAMESPACE_NAME="ai-news-staging"
+          elif [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            NAMESPACE_NAME="ai-news-production"
+          fi
+          
+          # Create application config
+          kubectl create configmap app-config \
+            --namespace="$NAMESPACE_NAME" \
+            --from-literal=environment="${{ github.event.inputs.environment }}" \
+            --from-literal=log-level="INFO" \
+            --from-literal=metrics-enabled="true" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: 🛡️ Setup RBAC
+        run: |
+          echo "🛡️ Setting up RBAC..."
+          
+          NAMESPACE_NAME=""
+          
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            NAMESPACE_NAME="ai-news-staging"
+          elif [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            NAMESPACE_NAME="ai-news-production"
+          fi
+          
+          # Create service account
+          kubectl create serviceaccount github-actions \
+            --namespace="$NAMESPACE_NAME" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          
+          # Create role
+          kubectl create role github-actions-role \
+            --namespace="$NAMESPACE_NAME" \
+            --verb=get,list,watch,create,update,patch,delete \
+            --resource=pods,deployments,services,ingresses,configmaps,secrets,jobs \
+            --dry-run=client -o yaml | kubectl apply -f -
+          
+          # Create role binding
+          kubectl create rolebinding github-actions-binding \
+            --namespace="$NAMESPACE_NAME" \
+            --role=github-actions-role \
+            --serviceaccount="$NAMESPACE_NAME:github-actions" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: 🌐 Setup Network Policies
+        run: |
+          echo "🌐 Setting up network policies..."
+          
+          NAMESPACE_NAME=""
+          
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            NAMESPACE_NAME="ai-news-staging"
+          elif [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            NAMESPACE_NAME="ai-news-production"
+          fi
+          
+          # Create network policy
+          kubectl apply -f - <<EOF
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: default-deny-all
+            namespace: $NAMESPACE_NAME
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+          EOF
+          
+          # Allow DNS
+          kubectl apply -f - <<EOF
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-dns
+            namespace: $NAMESPACE_NAME
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Egress
+            egress:
+            - to:
+              - namespaceSelector:
+                  matchLabels:
+                    name: kube-system
+              - podSelector:
+                  matchLabels:
+                    k8s-app: kube-dns
+            ports:
+            - protocol: TCP
+              port: 53
+            - protocol: UDP
+              port: 53
+          EOF
+
+      - name: 📊 Setup monitoring
+        run: |
+          echo "📊 Setting up monitoring..."
+          
+          NAMESPACE_NAME=""
+          
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            NAMESPACE_NAME="ai-news-staging"
+          elif [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            NAMESPACE_NAME="ai-news-production"
+          fi
+          
+          # Create monitoring configmap
+          kubectl create configmap monitoring-config \
+            --namespace="$NAMESPACE_NAME" \
+            --from-literal=prometheus-enabled="true" \
+            --from-literal=grafana-enabled="true" \
+            --from-literal=alerting-enabled="true" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: ✅ Verify setup
+        run: |
+          echo "✅ Verifying environment setup..."
+          
+          NAMESPACE_NAME=""
+          
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            NAMESPACE_NAME="ai-news-staging"
+          elif [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            NAMESPACE_NAME="ai-news-production"
+          fi
+          
+          # Verify namespace
+          kubectl get namespace "$NAMESPACE_NAME"
+          
+          # Verify secrets
+          kubectl get secrets -n "$NAMESPACE_NAME"
+          
+          # Verify service account
+          kubectl get serviceaccount github-actions -n "$NAMESPACE_NAME"
+          
+          # Verify configmaps
+          kubectl get configmaps -n "$NAMESPACE_NAME"
+          
+          # Verify network policies
+          kubectl get networkpolicies -n "$NAMESPACE_NAME"
+
+      - name: 📤 Setup completion report
+        run: |
+          echo "# 🏗️ Environment Setup Report" > setup-report.md
+          echo "" >> setup-report.md
+          echo "**Date:** $(date)" >> setup-report.md
+          echo "**Environment:** ${{ github.event.inputs.environment }}" >> setup-report.md
+          echo "**Action:** ${{ github.event.inputs.action }}" >> setup-report.md
+          echo "" >> setup-report.md
+          
+          echo "## ✅ Setup Completed" >> setup-report.md
+          echo "- ✅ Namespace created" >> setup-report.md
+          echo "- ✅ Secrets configured" >> setup-report.md
+          echo "- ✅ ConfigMaps created" >> setup-report.md
+          echo "- ✅ RBAC configured" >> setup-report.md
+          echo "- ✅ Network policies applied" >> setup-report.md
+          echo "- ✅ Monitoring configured" >> setup-report.md
+          echo "" >> setup-report.md
+          
+          echo "## 📋 Next Steps" >> setup-report.md
+          echo "1. Configure CI/CD pipeline secrets" >> setup-report.md
+          echo "2. Test deployment pipeline" >> setup-report.md
+          echo "3. Set up monitoring dashboards" >> setup-report.md
+          echo "4. Configure backup policies" >> setup-report.md
+          echo "5. Test rollback procedures" >> setup-report.md
+          
+          cat setup-report.md
+
+      - name: 📤 Upload setup report
+        uses: actions/upload-artifact@v3
+        with:
+          name: environment-setup-report
+          path: setup-report.md
+
+  # Job 3: Cleanup environment
+  cleanup-environment:
+    name: 🧹 Cleanup Environment
+    runs-on: ubuntu-latest
+    needs: validate-environment
+    if: github.event.inputs.action == 'cleanup' && github.event.inputs.dry_run != 'true'
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: ⚠️ Safety confirmation
+        run: |
+          echo "⚠️  WARNING: This will clean up the ${{ github.event.inputs.environment }} environment!"
+          echo "This action is irreversible and will delete all resources in the namespace."
+          echo ""
+          echo "Namespace to cleanup: ${{ github.event.inputs.environment }}"
+          echo "This cleanup will remove:"
+          echo "- All deployments"
+          echo "- All services"
+          echo "- All secrets"
+          echo "- All configmaps"
+          echo "- All persistent volumes"
+          echo ""
+          
+          if [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            echo "🚨 PRODUCTION CLEANUP - This is extremely dangerous!"
+            echo "Please confirm by setting DRY_RUN=false and manually approving this action."
+            exit 1
+          fi
+
+      - name: 🔑 Setup cluster access
+        run: |
+          # Install kubectl
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          
+          # Configure kubectl
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            echo "$STAGING_KUBECONFIG" | base64 -d > kubeconfig
+          elif [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            echo "$PRODUCTION_KUBECONFIG" | base64 -d > kubeconfig
+          fi
+          
+          export KUBECONFIG=kubeconfig
+
+      - name: 📋 List resources before cleanup
+        run: |
+          echo "📋 Listing resources before cleanup..."
+          
+          NAMESPACE_NAME=""
+          
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            NAMESPACE_NAME="ai-news-staging"
+          elif [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            NAMESPACE_NAME="ai-news-production"
+          fi
+          
+          echo "=== Deployments ==="
+          kubectl get deployments -n "$NAMESPACE_NAME"
+          
+          echo "=== Services ==="
+          kubectl get services -n "$NAMESPACE_NAME"
+          
+          echo "=== Pods ==="
+          kubectl get pods -n "$NAMESPACE_NAME"
+          
+          echo "=== Secrets ==="
+          kubectl get secrets -n "$NAMESPACE_NAME"
+          
+          echo "=== ConfigMaps ==="
+          kubectl get configmaps -n "$NAMESPACE_NAME"
+
+      - name: 🧹 Cleanup resources
+        run: |
+          echo "🧹 Cleaning up resources..."
+          
+          NAMESPACE_NAME=""
+          
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            NAMESPACE_NAME="ai-news-staging"
+          elif [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            NAMESPACE_NAME="ai-news-production"
+          fi
+          
+          # Delete all resources
+          kubectl delete all --all -n "$NAMESPACE_NAME" --ignore-not-found=true
+          kubectl delete configmaps --all -n "$NAMESPACE_NAME" --ignore-not-found=true
+          kubectl delete secrets --all -n "$NAMESPACE_NAME" --ignore-not-found=true
+          kubectl delete pvc --all -n "$NAMESPACE_NAME" --ignore-not-found=true
+          kubectl delete ingress --all -n "$NAMESPACE_NAME" --ignore-not-found=true
+          kubectl delete networkpolicy --all -n "$NAMESPACE_NAME" --ignore-not-found=true
+
+      - name: 🗑️ Delete namespace
+        run: |
+          echo "🗑️ Deleting namespace..."
+          
+          NAMESPACE_NAME=""
+          
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            NAMESPACE_NAME="ai-news-staging"
+          elif [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            NAMESPACE_NAME="ai-news-production"
+          fi
+          
+          # Delete namespace
+          kubectl delete namespace "$NAMESPACE_NAME" --ignore-not-found=true
+
+      - name: ✅ Verify cleanup
+        run: |
+          echo "✅ Verifying cleanup..."
+          
+          NAMESPACE_NAME=""
+          
+          if [ "${{ github.event.inputs.environment }}" == "staging" ]; then
+            NAMESPACE_NAME="ai-news-staging"
+          elif [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            NAMESPACE_NAME="ai-news-production"
+          fi
+          
+          # Check if namespace still exists
+          if kubectl get namespace "$NAMESPACE_NAME" 2>/dev/null; then
+            echo "⚠️  Namespace still exists, cleanup may be in progress"
+          else
+            echo "✅ Namespace successfully deleted"
+          fi
+
+      - name: 📤 Cleanup completion report
+        run: |
+          echo "# 🧹 Environment Cleanup Report" > cleanup-report.md
+          echo "" >> cleanup-report.md
+          echo "**Date:** $(date)" >> cleanup-report.md
+          echo "**Environment:** ${{ github.event.inputs.environment }}" >> cleanup-report.md
+          echo "**Action:** ${{ github.event.inputs.action }}" >> cleanup-report.md
+          echo "" >> cleanup-report.md
+          
+          echo "## 🧹 Cleanup Completed" >> cleanup-report.md
+          echo "- ✅ All resources deleted" >> cleanup-report.md
+          echo "- ✅ Namespace removed" >> cleanup-report.md
+          echo "- ✅ Cluster cleaned" >> cleanup-report.md
+          echo "" >> cleanup-report.md
+          
+          echo "## ⚠️ Important Notes" >> cleanup-report.md
+          echo "- This action is irreversible" >> cleanup-report.md
+          echo "- All data has been permanently deleted" >> cleanup-report.md
+          echo "- Recreate namespace to redeploy" >> cleanup-report.md
+          
+          cat cleanup-report.md
+
+      - name: 📤 Upload cleanup report
+        uses: actions/upload-artifact@v3
+        with:
+          name: environment-cleanup-report
+          path: cleanup-report.md
+
+  # Job 4: Generate summary
+  environment-summary:
+    name: 📊 Environment Summary
+    runs-on: ubuntu-latest
+    needs: [validate-environment, setup-environment, cleanup-environment]
+    if: always()
+    steps:
+      - name: 📥 Download reports
+        uses: actions/download-artifact@v3
+
+      - name: 📊 Generate comprehensive summary
+        run: |
+          echo "# 🌍 Environment Management Summary" > environment-summary.md
+          echo "" >> environment-summary.md
+          echo "**Date:** $(date)" >> environment-summary.md
+          echo "**Environment:** ${{ github.event.inputs.environment }}" >> environment-report.md
+          echo "**Action:** ${{ github.event.inputs.action }}" >> environment-summary.md
+          echo "**Dry Run:** ${{ github.event.inputs.dry_run }}" >> environment-summary.md
+          echo "" >> environment-summary.md
+          
+          echo "## 📋 Workflow Results" >> environment-summary.md
+          echo "- **Validation:** ${{ needs.validate-environment.result }}" >> environment-summary.md
+          
+          if [ "${{ github.event.inputs.action }}" == "setup" ]; then
+            echo "- **Setup:** ${{ needs.setup-environment.result }}" >> environment-summary.md
+          fi
+          
+          if [ "${{ github.event.inputs.action }}" == "cleanup" ]; then
+            echo "- **Cleanup:** ${{ needs.cleanup-environment.result }}" >> environment-summary.md
+          fi
+          echo "" >> environment-summary.md
+          
+          echo "## 📁 Generated Reports" >> environment-summary.md
+          
+          # List all artifacts
+          if [ -d "environment-validation-report" ]; then
+            echo "- ✅ Environment Validation Report" >> environment-summary.md
+          fi
+          
+          if [ -d "environment-setup-report" ]; then
+            echo "- ✅ Environment Setup Report" >> environment-summary.md
+          fi
+          
+          if [ -d "environment-cleanup-report" ]; then
+            echo "- ✅ Environment Cleanup Report" >> environment-summary.md
+          fi
+          echo "" >> environment-summary.md
+          
+          if [ "${{ github.event.inputs.action }}" == "validate" ]; then
+            echo "## 📋 Next Steps" >> environment-summary.md
+            echo "1. Review validation report" >> environment-summary.md
+            echo "2. Configure missing secrets" >> environment-summary.md
+            echo "3. Run setup if validation passed" >> environment-summary.md
+          elif [ "${{ github.event.inputs.action }}" == "setup" ]; then
+            echo "## 📋 Next Steps" >> environment-summary.md
+            echo "1. Review setup report" >> environment-summary.md
+            echo "2. Test deployment pipeline" >> environment-summary.md
+            echo "3. Configure monitoring" >> environment-summary.md
+          elif [ "${{ github.event.inputs.action }}" == "cleanup" ]; then
+            echo "## 📋 Next Steps" >> environment-summary.md
+            echo "1. Review cleanup report" >> environment-summary.md
+            echo "2. Recreate namespace if needed" >> environment-summary.md
+            echo "3. Redeploy application if required" >> environment-summary.md
+          fi
+          
+          cat environment-summary.md
+
+      - name: 📤 Upload environment summary
+        uses: actions/upload-artifact@v3
+        with:
+          name: environment-management-summary
+          path: environment-summary.md

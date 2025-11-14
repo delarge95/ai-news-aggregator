@@ -1,0 +1,114 @@
+[run]
+# Source files to analyze
+source = app
+branch = True
+parallel = True
+
+# Output directories and files
+omit = 
+    # Exclude migrations and tests
+    */migrations/*
+    */tests/*
+    test_*.py
+    conftest.py
+    setup.py
+    */venv/*
+    */virtualenv/*
+    .tox/*
+    */site-packages/*
+    */node_modules/*
+    */static/*
+    */media/*
+    */__pycache__/*
+    */.*
+    docker-compose.yml
+    Dockerfile
+    requirements.txt
+    .coveragerc
+    */alembic/*
+    */db/migrations/*
+    */celery_app.py
+    */start_celery.sh
+    */stop_celery.sh
+    */status_celery.sh
+
+# Include patterns for coverage
+include = 
+    app/*
+    */api/*
+    */core/*
+    */db/*
+    */services/*
+    */tasks/*
+    */utils/*
+    main.py
+
+[report]
+# Report configuration
+exclude_lines =
+    # Standard Python excludes
+    pragma: no cover
+    def __repr__
+    if self.debug:
+    if settings.DEBUG
+    raise AssertionError
+    raise NotImplementedError
+    if 0:
+    if __name__ == .__main__.:
+    class .*\bProtocol\):
+    @(abc\.)?abstractmethod
+
+    # Testing related
+    @pytest.mark.skip
+    pytest.skip
+    except ImportError:
+    except OSError:
+    # Environment related
+    os.environ
+    os.getenv
+
+ignore_errors = True
+
+# Show missing lines
+show_missing = True
+skip_covered = False
+
+# Precision for percentages
+precision = 2
+
+[html]
+# HTML report configuration
+directory = htmlcov
+title = AI News Aggregator - Coverage Report
+
+# Additional HTML options
+show_contexts = True
+skip_covered = False
+
+[xml]
+# XML report configuration
+output = coverage.xml
+
+[json]
+# JSON report configuration
+output = coverage.json
+pretty_print = True
+
+# Minimum coverage thresholds
+fail_under = 80
+show_missing = True
+
+[paths]
+# Path mapping for consistent coverage reporting
+source =
+    */app/
+    app/
+
+# Parallel mode settings for distributed testing
+concurrency = thread
+
+# Coverage context configuration for CI/CD
+contexts = 
+    ci
+    local
+    github-actions

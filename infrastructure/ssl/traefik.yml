@@ -1,0 +1,106 @@
+# Traefik Configuration for AI News Aggregator
+# Version: 2.10
+# Description: SSL termination and reverse proxy configuration
+
+api:
+  dashboard: true
+  insecure: false
+  debug: true
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entrypoint:
+          to: websecure
+          scheme: https
+
+  websecure:
+    address: ":443"
+    http:
+      middlewares:
+        - security-headers@file
+
+      middlewares:
+        - security-headers@file
+
+accessLog: {}
+
+tracing:
+  zipkin:
+    httpEndpoint: "http://jaeger:9411/api/v2/spans"
+
+metrics:
+  prometheus:
+    addEntryPointsLabels: true
+    addServicesLabels: true
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: monitoring
+
+  file:
+    filename: "/etc/traefik/dynamic.yml"
+    watch: true
+
+certificateResolvers:
+  letsencrypt:
+    acme:
+      email: "${SSL_EMAIL}"
+      storage: "/etc/traefik/acme.json"
+      httpChallenge:
+        entryPoint: web
+      # DNS Challenge (optional - requires API key)
+      # dnsChallenge:
+      #   provider: digitalocean
+      #   delayBeforeCheck: 0
+      #   resolvers:
+      #     - "1.1.1.1:53"
+      #     - "8.8.8.8:53"
+
+# Logging configuration
+log:
+  level: INFO
+  format: json
+
+# Access log
+accessLog:
+  filePath: "/var/log/traefik/access.log"
+  bufferingSize: 100
+
+# API configuration
+api:
+  dashboard: true
+  insecure: false
+
+# Global settings
+global:
+  sendAnonymousUsage: false
+
+# Metrics
+metrics:
+  prometheus:
+    addEntryPointsLabels: true
+    addServicesLabels: true
+
+# Ping configuration
+ping:
+  entryPoint: web
+
+# Servers transport
+serversTransport:
+  insecureSkipVerify: false
+  maxIdleConnsPerHost: 10
+  forwardingTimeouts:
+    dialTimeout: 30s
+    responseHeaderTimeout: 30s
+    idleConnTimeout: 90s
+
+# Experimental features
+experimental:
+  localPlugins:
+    security-headers:
+      module: github.com/traefik/plugin-security-headers

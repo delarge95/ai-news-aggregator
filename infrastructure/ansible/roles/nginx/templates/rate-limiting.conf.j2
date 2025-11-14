@@ -1,0 +1,29 @@
+# Nginx Rate Limiting Configuration
+
+# Rate limiting zones
+limit_req_zone $binary_remote_addr zone=login:10m rate=5r/m;
+limit_req_zone $binary_remote_addr zone=api:10m rate=100r/m;
+limit_req_zone $binary_remote_addr zone=general:10m rate=30r/m;
+
+# Connection limiting zones
+limit_conn_zone $binary_remote_addr zone=addr:10m;
+
+# Apply rate limiting
+location /api/auth/login {
+    limit_req zone=login burst=3 nodelay;
+    proxy_pass http://ai_news_backend;
+}
+
+location /api/ {
+    limit_req zone=api burst=20 nodelay;
+    proxy_pass http://ai_news_backend;
+}
+
+location / {
+    limit_req zone=general burst=10 nodelay;
+}
+
+# Apply connection limiting
+server {
+    limit_conn addr 20;
+}

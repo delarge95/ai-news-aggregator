@@ -1,0 +1,70 @@
+---
+# Ansible Role: Nginx Configuration
+# Description: Install and configure Nginx as reverse proxy
+
+- name: Install Nginx
+  apt:
+    name: nginx
+    state: present
+    update_cache: yes
+
+- name: Ensure Nginx service is enabled and started
+  systemd:
+    name: nginx
+    state: started
+    enabled: yes
+
+- name: Create Nginx site configuration
+  template:
+    src: ai-news-aggregator.conf.j2
+    dest: /etc/nginx/sites-available/ai-news-aggregator
+  notify: restart nginx
+
+- name: Enable Nginx site
+  file:
+    src: /etc/nginx/sites-available/ai-news-aggregator
+    dest: /etc/nginx/sites-enabled/ai-news-aggregator
+    state: link
+  notify: restart nginx
+
+- name: Remove default Nginx site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: restart nginx
+
+- name: Create Nginx security configuration
+  template:
+    src: nginx-security.conf.j2
+    dest: /etc/nginx/conf.d/security.conf
+  notify: restart nginx
+
+- name: Create rate limiting configuration
+  template:
+    src: rate-limiting.conf.j2
+    dest: /etc/nginx/conf.d/rate-limiting.conf
+  notify: restart nginx
+
+- name: Set proper permissions on Nginx directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: '0755'
+  loop:
+    - /var/lib/nginx/tmp
+    - /var/cache/nginx/proxy
+    - /var/log/nginx
+
+- name: Create Nginx log rotation
+  template:
+    src: nginx.logrotate.j2
+    dest: /etc/logrotate.d/nginx-ai-news
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Test Nginx configuration
+  command: nginx -t
+  changed_when: false

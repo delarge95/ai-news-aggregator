@@ -1,0 +1,28 @@
+# Fast Start Configuration - Minimized compilation
+# This overrides docker-compose.yml for faster development startup
+# Run with: docker-compose -f docker-compose.yml -f docker-compose.fast.yml up
+
+services:
+  backend:
+    # Wait for backend image to complete, then override with development
+    volumes:
+      - ./backend:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DEBUG=true
+
+  celery_worker:
+    # Use the same image as backend
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  celery_beat:
+    # Use the same image as backend
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  frontend:
+    environment:
+      - DEBUG=true

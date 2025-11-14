@@ -1,0 +1,440 @@
+name: Docker Build & Push
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Type of build to perform'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - backend
+          - frontend
+      push_registry:
+        description: 'Push to registry'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE_NAME: ${{ github.repository }}-backend
+  FRONTEND_IMAGE_NAME: ${{ github.repository }}-frontend
+
+jobs:
+  # Job 1: Determine build context
+  determine-build:
+    name: 🎯 Determine Build Context
+    runs-on: ubuntu-latest
+    outputs:
+      backend-changed: ${{ steps.changes.outputs.backend }}
+      frontend-changed: ${{ steps.changes.outputs.frontend }}
+      build-type: ${{ steps.build-type.outputs.type }}
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 📊 Check for changes
+        id: changes
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
+            docker:
+              - 'docker-compose.yml'
+              - '.github/workflows/docker-build.yml'
+
+      - name: 🎯 Determine build type
+        id: build-type
+        run: |
+          if [ "${{ github.event.inputs.build_type }}" != "" ]; then
+            echo "type=${{ github.event.inputs.build_type }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "type=full" >> $GITHUB_OUTPUT
+          else
+            # Determine based on changed files
+            if [[ "${{ steps.changes.outputs.backend }}" == "true" || "${{ steps.changes.outputs.frontend }}" == "true" ]]; then
+              echo "type=full" >> $GITHUB_OUTPUT
+            else
+              echo "type=none" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+  # Job 2: Build Backend Image
+  build-backend:
+    name: 🐍 Build Backend Image
+    runs-on: ubuntu-latest
+    needs: determine-build
+    if: needs.determine-build.outputs.backend-changed == 'true' || needs.determine-build.outputs.build-type == 'full' || needs.determine-build.outputs.build-type == 'backend'
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Log in to Container Registry
+        if: env.PUSH_REGISTRY == 'true' || github.event.inputs.push_registry == 'true' || contains(github.ref, 'refs/tags/')
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🏷️ Extract metadata
+        id: meta-backend
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ github.ref_name }}
+            type=raw,value=${{ github.sha }}
+            ${{ contains(github.ref, 'refs/tags/') && format('type=raw,value={0}', github.ref_name) || '' }}
+
+      - name: 🔍 Build and test backend image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: false
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+          load: true
+
+      - name: 🔍 Test backend container
+        run: |
+          echo "🧪 Testing backend container..."
+          
+          # Test health endpoint
+          docker run --rm -d --name test-backend --health-cmd="curl -f http://localhost:8000/health" --health-interval=10s --health-timeout=5s --health-retries=3 ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}
+          
+          # Wait for health check
+          timeout 60 bash -c 'until docker ps | grep -q healthy; do sleep 2; done' || echo "Health check timed out"
+          
+          # Test basic functionality
+          docker exec test-backend python -c "import app.main; print('✅ Backend imports successful')" || exit 1
+          
+          # Test database connectivity (mock)
+          docker exec test-backend python -c "
+          import asyncio
+          from app.database.connection import engine
+          async def test_db():
+              async with engine.begin() as conn:
+                  await conn.execute('SELECT 1')
+              print('✅ Database connection test passed')
+          asyncio.run(test_db())
+          " || echo "⚠️  Database connection test skipped (expected without DB)"
+          
+          docker stop test-backend
+
+      - name: 📊 Image size analysis
+        run: |
+          echo "📏 Backend image size analysis:"
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep ${{ env.BACKEND_IMAGE_NAME }}
+
+      - name: 🔒 Security scan of backend image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-backend.sarif'
+
+      - name: 📤 Upload scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-backend.sarif'
+
+      - name: 🏷️ Push backend image
+        if: env.PUSH_REGISTRY == 'true' || github.event.inputs.push_registry == 'true' || contains(github.ref, 'refs/tags/')
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: 📁 Save backend image
+        if: env.PUSH_REGISTRY != 'true' && github.event.inputs.push_registry != 'true' && !contains(github.ref, 'refs/tags/')
+        run: |
+          docker save ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }} -o backend-image.tar
+
+      - name: 📤 Upload backend artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: backend-image
+          path: backend-image.tar
+          retention-days: 7
+
+  # Job 3: Build Frontend Image
+  build-frontend:
+    name: ⚛️ Build Frontend Image
+    runs-on: ubuntu-latest
+    needs: determine-build
+    if: needs.determine-build.outputs.frontend-changed == 'true' || needs.determine-build.outputs.build-type == 'full' || needs.determine-build.outputs.build-type == 'frontend'
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Log in to Container Registry
+        if: env.PUSH_REGISTRY == 'true' || github.event.inputs.push_registry == 'true' || contains(github.ref, 'refs/tags/')
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🏷️ Extract metadata
+        id: meta-frontend
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ github.ref_name }}
+            type=raw,value=${{ github.sha }}
+            ${{ contains(github.ref, 'refs/tags/') && format('type=raw,value={0}', github.ref_name) || '' }}
+
+      - name: 🔍 Build and test frontend image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./frontend/ai-news-frontend
+          file: ./frontend/ai-news-frontend/Dockerfile
+          push: false
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+          load: true
+
+      - name: 🔍 Test frontend container
+        run: |
+          echo "🧪 Testing frontend container..."
+          
+          # Test container startup
+          docker run --rm -d --name test-frontend -p 3000:3000 ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}
+          
+          # Wait for container to start
+          sleep 10
+          
+          # Test that container is running
+          docker ps | grep test-frontend || exit 1
+          
+          # Test basic functionality (check if process is running)
+          docker exec test-frontend ps aux | grep -E "node|vite" || echo "Node process check completed"
+          
+          docker stop test-frontend
+
+      - name: 📊 Image size analysis
+        run: |
+          echo "📏 Frontend image size analysis:"
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep ${{ env.FRONTEND_IMAGE_NAME }}
+
+      - name: 🔒 Security scan of frontend image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-frontend.sarif'
+
+      - name: 📤 Upload scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-frontend.sarif'
+
+      - name: 🏷️ Push frontend image
+        if: env.PUSH_REGISTRY == 'true' || github.event.inputs.push_registry == 'true' || contains(github.ref, 'refs/tags/')
+        uses: docker/build-push-action@v4
+        with:
+          context: ./frontend/ai-news-frontend
+          file: ./frontend/ai-news-frontend/Dockerfile
+          push: true
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: 📁 Save frontend image
+        if: env.PUSH_REGISTRY != 'true' && github.event.inputs.push_registry != 'true' && !contains(github.ref, 'refs/tags/')
+        run: |
+          docker save ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }} -o frontend-image.tar
+
+      - name: 📤 Upload frontend artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: frontend-image
+          path: frontend-image.tar
+          retention-days: 7
+
+  # Job 4: Multi-platform build
+  multi-platform-build:
+    name: 🌍 Multi-platform Build
+    runs-on: ubuntu-latest
+    if: contains(github.ref, 'refs/tags/') || github.event.inputs.build_type == 'full'
+    strategy:
+      matrix:
+        image: [backend, frontend]
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: 🔑 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: 🔑 Log in to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🏷️ Extract metadata for ${{ matrix.image }}
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ matrix.image == 'backend' && env.BACKEND_IMAGE_NAME || env.FRONTEND_IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ github.ref_name }}
+            type=raw,value=${{ github.sha }}
+
+      - name: 🏗️ Build and push ${{ matrix.image }} image
+        uses: docker/build-push-action@v4
+        with:
+          context: ${{ matrix.image == 'backend' && './backend' || './frontend/ai-news-frontend' }}
+          file: ${{ matrix.image == 'backend' && './backend/Dockerfile' || './frontend/ai-news-frontend/Dockerfile' }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Job 5: Build summary and notifications
+  build-summary:
+    name: 📊 Build Summary
+    runs-on: ubuntu-latest
+    needs: [determine-build, build-backend, build-frontend]
+    if: always()
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📊 Generate build summary
+        run: |
+          echo "# 📦 Docker Build Summary" > build-summary.md
+          echo "" >> build-summary.md
+          echo "**Repository:** ${{ github.repository }}" >> build-summary.md
+          echo "**Branch:** ${{ github.ref_name }}" >> build-summary.md
+          echo "**Commit:** ${{ github.sha }}" >> build-summary.md
+          echo "**Build Type:** ${{ needs.determine-build.outputs.build-type }}" >> build-summary.md
+          echo "**Date:** $(date)" >> build-summary.md
+          echo "" >> build-summary.md
+          
+          echo "## 🎯 Build Configuration" >> build-summary.md
+          echo "- Backend Changed: ${{ needs.determine-build.outputs.backend-changed }}" >> build-summary.md
+          echo "- Frontend Changed: ${{ needs.determine-build.outputs.frontend-changed }}" >> build-summary.md
+          echo "- Build Type: ${{ needs.determine-build.outputs.build-type }}" >> build-summary.md
+          echo "" >> build-summary.md
+          
+          echo "## 📊 Build Results" >> build-summary.md
+          
+          # Backend results
+          if [ "${{ needs.build-backend.result }}" == "success" ]; then
+            echo "### 🐍 Backend Image" >> build-summary.md
+            echo "- ✅ Build completed successfully" >> build-summary.md
+            echo "- 🏷️  Tag: \`${{ github.sha }}\`" >> build-summary.md
+            if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+              echo "- 🏷️  Tag: \`${{ github.ref_name }}\`" >> build-summary.md
+            fi
+          else
+            echo "### 🐍 Backend Image" >> build-summary.md
+            echo "- ❌ Build failed" >> build-summary.md
+          fi
+          
+          echo "" >> build-summary.md
+          
+          # Frontend results
+          if [ "${{ needs.build-frontend.result }}" == "success" ]; then
+            echo "### ⚛️ Frontend Image" >> build-summary.md
+            echo "- ✅ Build completed successfully" >> build-summary.md
+            echo "- 🏷️  Tag: \`${{ github.sha }}\`" >> build-summary.md
+            if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+              echo "- 🏷️  Tag: \`${{ github.ref_name }}\`" >> build-summary.md
+            fi
+          else
+            echo "### ⚛️ Frontend Image" >> build-summary.md
+            echo "- ❌ Build failed" >> build-summary.md
+          fi
+          
+          echo "" >> build-summary.md
+          echo "## 🔗 Registry Information" >> build-summary.md
+          echo "- **Registry:** \`${{ env.REGISTRY }}\`" >> build-summary.md
+          echo "- **Repository:** \`${{ github.repository }}\`" >> build-summary.md
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "- **Tag:** \`${{ github.ref_name }}\`" >> build-summary.md
+            echo "- **Latest:** \`latest\`" >> build-summary.md
+          else
+            echo "- **Branch:** \`${{ github.ref_name }}\`" >> build-summary.md
+            echo "- **Commit:** \`${{ github.sha }}\`" >> build-summary.md
+          fi
+          
+          cat build-summary.md
+
+      - name: 📤 Upload build summary
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-summary
+          path: build-summary.md
+
+      - name: 📤 Success notification
+        if: success() && (contains(github.ref, 'refs/tags/') || env.PUSH_REGISTRY == 'true')
+        run: |
+          echo "✅ Docker build completed successfully!"
+          echo "🏷️  Images pushed to registry: ${{ env.REGISTRY }}"
+          echo "📦 Backend: ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }}"
+          echo "📦 Frontend: ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }}"
+
+      - name: 📤 Failure notification
+        if: failure()
+        run: |
+          echo "❌ Docker build failed!"
+          echo "🔍 Check the build logs for details."
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch: ${{ github.ref_name }}"

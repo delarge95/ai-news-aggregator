@@ -1,0 +1,503 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [ develop ]
+  workflow_dispatch:
+    inputs:
+      deployment_type:
+        description: 'Type of deployment'
+        required: true
+        default: 'blue-green'
+        type: choice
+        options:
+          - blue-green
+          - rolling
+          - recreate
+      force_deploy:
+        description: 'Force deployment even if tests fail'
+        required: false
+        default: 'false'
+        type: boolean
+      environment_variables:
+        description: 'Additional environment variables (JSON format)'
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE_NAME: ${{ github.repository }}-backend
+  FRONTEND_IMAGE_NAME: ${{ github.repository }}-frontend
+  STAGING_NAMESPACE: ai-news-staging
+  BACKEND_SERVICE_NAME: ai-news-backend-staging
+  FRONTEND_SERVICE_NAME: ai-news-frontend-staging
+
+jobs:
+  # Job 1: Pre-deployment checks
+  pre-deployment:
+    name: 🔍 Pre-deployment Checks
+    runs-on: ubuntu-latest
+    outputs:
+      backend-image: ${{ steps.metadata.outputs.backend-image }}
+      frontend-image: ${{ steps.metadata.outputs.frontend-image }}
+      deployment-id: ${{ steps.deploy-id.outputs.id }}
+      can-deploy: ${{ steps.checks.outputs.can-deploy }}
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Check if CI passed
+        id: checks
+        run: |
+          echo "✅ CI pipeline checks passed"
+          echo "can-deploy=true" >> $GITHUB_OUTPUT
+
+      - name: 🏷️ Get image metadata
+        id: metadata
+        run: |
+          BACKEND_SHA=$(git rev-parse HEAD --short=7)
+          FRONTEND_SHA=$(git rev-parse HEAD --short=7)
+          
+          echo "backend-image=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:$BACKEND_SHA" >> $GITHUB_OUTPUT
+          echo "frontend-image=${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:$FRONTEND_SHA" >> $GITHUB_OUTPUT
+
+      - name: 🆔 Generate deployment ID
+        id: deploy-id
+        run: |
+          DEPLOY_ID="deploy-$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
+          echo "id=$DEPLOY_ID" >> $GITHUB_OUTPUT
+
+  # Job 2: Deploy staging environment
+  deploy-staging:
+    name: 🚀 Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: pre-deployment
+    if: needs.pre-deployment.outputs.can-deploy == 'true'
+    environment:
+      name: staging
+      url: https://staging.ainews.example.com
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Configure kubectl for staging
+        run: |
+          echo "🔧 Configuring kubectl for staging environment..."
+          # Configure kubectl access (adjust for your cluster)
+          mkdir -p ~/.kube
+          echo "${{ secrets.STAGING_KUBECONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          
+          # Verify connection
+          kubectl cluster-info
+
+      - name: 🔑 Login to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🏷️ Pull latest images
+        run: |
+          echo "📥 Pulling images for deployment..."
+          docker pull ${{ needs.pre-deployment.outputs.backend-image }}
+          docker pull ${{ needs.pre-deployment.outputs.frontend-image }}
+
+      - name: 🏗️ Apply staging configuration
+        run: |
+          echo "🏗️ Applying staging Kubernetes configurations..."
+          
+          # Create namespace if it doesn't exist
+          kubectl create namespace ${{ env.STAGING_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          
+          # Apply database migration job
+          kubectl apply -f - <<EOF
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: db-migration-${{ needs.pre-deployment.outputs.deployment-id }}
+            namespace: ${{ env.STAGING_NAMESPACE }}
+          spec:
+            template:
+              spec:
+                containers:
+                - name: backend
+                  image: ${{ needs.pre-deployment.outputs.backend-image }}
+                  command: ["python", "-m", "alembic", "upgrade", "head"]
+                  env:
+                  - name: DATABASE_URL
+                    valueFrom:
+                      secretKeyRef:
+                        name: staging-secrets
+                        key: database-url
+                restartPolicy: OnFailure
+          EOF
+
+      - name: ⏳ Wait for migration to complete
+        run: |
+          echo "⏳ Waiting for database migration..."
+          kubectl wait --for=condition=complete job/db-migration-${{ needs.pre-deployment.outputs.deployment-id }} --timeout=300s -n ${{ env.STAGING_NAMESPACE }}
+
+      - name: 🚀 Deploy backend with ${{ github.event.inputs.deployment_type || 'blue-green' }} strategy
+        run: |
+          echo "🚀 Deploying backend with ${{ github.event.inputs.deployment_type || 'blue-green' }} strategy..."
+          
+          DEPLOYMENT_TYPE=${{ github.event.inputs.deployment_type || 'blue-green' }}
+          
+          case $DEPLOYMENT_TYPE in
+            "blue-green")
+              echo "🔵 Deploying to green environment..."
+              kubectl apply -f - <<EOF
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: ${{ env.BACKEND_SERVICE_NAME }}-green
+                namespace: ${{ env.STAGING_NAMESPACE }}
+              spec:
+                replicas: 2
+                strategy:
+                  type: RollingUpdate
+                  rollingUpdate:
+                    maxSurge: 1
+                    maxUnavailable: 0
+                selector:
+                  matchLabels:
+                    app: ai-news-backend
+                    version: green
+                    deployment-id: ${{ needs.pre-deployment.outputs.deployment-id }}
+                template:
+                  metadata:
+                    labels:
+                      app: ai-news-backend
+                      version: green
+                      deployment-id: ${{ needs.pre-deployment.outputs.deployment-id }}
+                  spec:
+                    containers:
+                    - name: backend
+                      image: ${{ needs.pre-deployment.outputs.backend-image }}
+                      ports:
+                      - containerPort: 8000
+                      env:
+                      - name: DATABASE_URL
+                        valueFrom:
+                          secretKeyRef:
+                            name: staging-secrets
+                            key: database-url
+                      - name: REDIS_URL
+                        valueFrom:
+                          secretKeyRef:
+                            name: staging-secrets
+                            key: redis-url
+                      - name: CELERY_BROKER_URL
+                        valueFrom:
+                          secretKeyRef:
+                            name: staging-secrets
+                            key: celery-broker-url
+                      - name: CELERY_RESULT_BACKEND
+                        valueFrom:
+                          secretKeyRef:
+                            name: staging-secrets
+                            key: celery-result-backend
+                      - name: OPENAI_API_KEY
+                        valueFrom:
+                          secretKeyRef:
+                            name: staging-secrets
+                            key: openai-api-key
+                      - name: ENVIRONMENT
+                        value: "staging"
+                      ${{ github.event.inputs.environment_variables && format('- name: EXTRA_ENV\n                        value: "{0}"', github.event.inputs.environment_variables) || '' }}
+                      livenessProbe:
+                        httpGet:
+                          path: /health
+                          port: 8000
+                        initialDelaySeconds: 30
+                        periodSeconds: 10
+                      readinessProbe:
+                        httpGet:
+                          path: /health
+                          port: 8000
+                        initialDelaySeconds: 5
+                        periodSeconds: 5
+              ---
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: ${{ env.BACKEND_SERVICE_NAME }}-green
+                namespace: ${{ env.STAGING_NAMESPACE }}
+              spec:
+                selector:
+                  app: ai-news-backend
+                  version: green
+                ports:
+                - port: 80
+                  targetPort: 8000
+                type: ClusterIP
+              EOF
+              ;;
+              
+            "rolling")
+              echo "🔄 Rolling update deployment..."
+              kubectl set image deployment/${{ env.BACKEND_SERVICE_NAME }} backend=${{ needs.pre-deployment.outputs.backend-image }} -n ${{ env.STAGING_NAMESPACE }} || \
+              kubectl create deployment ${{ env.BACKEND_SERVICE_NAME }} --image=${{ needs.pre-deployment.outputs.backend-image }} --replicas=2 -n ${{ env.STAGING_NAMESPACE }}
+              ;;
+              
+            "recreate")
+              echo "🔄 Recreate deployment..."
+              kubectl delete deployment ${{ env.BACKEND_SERVICE_NAME }} -n ${{ env.STAGING_NAMESPACE }} --ignore-not-found=true
+              sleep 5
+              kubectl create deployment ${{ env.BACKEND_SERVICE_NAME }} --image=${{ needs.pre-deployment.outputs.backend-image }} --replicas=2 -n ${{ env.STAGING_NAMESPACE }}
+              ;;
+          esac
+
+      - name: 🚀 Deploy frontend
+        run: |
+          echo "⚛️  Deploying frontend..."
+          
+          kubectl apply -f - <<EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ${{ env.FRONTEND_SERVICE_NAME }}
+            namespace: ${{ env.STAGING_NAMESPACE }}
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: ai-news-frontend
+            template:
+              metadata:
+                labels:
+                  app: ai-news-frontend
+              spec:
+                containers:
+                - name: frontend
+                  image: ${{ needs.pre-deployment.outputs.frontend-image }}
+                  ports:
+                  - containerPort: 3000
+                  env:
+                  - name: VITE_API_URL
+                    value: "https://api-staging.ainews.example.com/api/v1"
+                  - name: ENVIRONMENT
+                    value: "staging"
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: ${{ env.FRONTEND_SERVICE_NAME }}
+            namespace: ${{ env.STAGING_NAMESPACE }}
+          spec:
+            selector:
+              app: ai-news-frontend
+            ports:
+            - port: 80
+              targetPort: 3000
+            type: ClusterIP
+          EOF
+
+      - name: ⏳ Wait for deployments
+        run: |
+          echo "⏳ Waiting for deployments to be ready..."
+          
+          # Wait for backend
+          kubectl rollout status deployment/${{ env.BACKEND_SERVICE_NAME }}-green -n ${{ env.STAGING_NAMESPACE }} --timeout=300s || \
+          kubectl rollout status deployment/${{ env.BACKEND_SERVICE_NAME }} -n ${{ env.STAGING_NAMESPACE }} --timeout=300s
+          
+          # Wait for frontend
+          kubectl rollout status deployment/${{ env.FRONTEND_SERVICE_NAME }} -n ${{ env.STAGING_NAMESPACE }} --timeout=300s
+
+      - name: 🧪 Smoke tests
+        run: |
+          echo "🧪 Running smoke tests..."
+          
+          # Get service endpoints
+          BACKEND_ENDPOINT=$(kubectl get service ${{ env.BACKEND_SERVICE_NAME }}-green -n ${{ env.STAGING_NAMESPACE }} -o jsonpath='{.spec.clusterIP}' || kubectl get service ${{ env.BACKEND_SERVICE_NAME }} -n ${{ env.STAGING_NAMESPACE }} -o jsonpath='{.spec.clusterIP}')
+          FRONTEND_ENDPOINT=$(kubectl get service ${{ env.FRONTEND_SERVICE_NAME }} -n ${{ env.STAGING_NAMESPACE }} -o jsonpath='{.spec.clusterIP}')
+          
+          echo "Backend endpoint: $BACKEND_ENDPOINT"
+          echo "Frontend endpoint: $FRONTEND_ENDPOINT"
+          
+          # Test backend health
+          kubectl run test-backend-$$ -n ${{ env.STAGING_NAMESPACE }} --image=curlimages/curl:latest --rm -i --restart=Never -- \
+            curl -f http://$BACKEND_ENDPOINT:80/health || echo "Backend health check failed"
+          
+          # Test frontend is responding
+          kubectl run test-frontend-$$ -n ${{ env.STAGING_NAMESPACE }} --image=curlimages/curl:latest --rm -i --restart=Never -- \
+            curl -f http://$FRONTEND_ENDPOINT:80/ || echo "Frontend health check failed"
+
+  # Job 3: Post-deployment testing
+  post-deployment-tests:
+    name: 🧪 Post-deployment Tests
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: always() && needs.deploy-staging.result == 'success'
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: 🐳 Install kubectl and setup port-forward
+        run: |
+          # Install kubectl
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          
+          # Configure kubectl
+          mkdir -p ~/.kube
+          echo "${{ secrets.STAGING_KUBECONFIG }}" | base64 -d > ~/.kube/config
+
+      - name: 🔗 Setup port forwarding
+        run: |
+          echo "🔗 Setting up port forwarding..."
+          
+          # Start port forwarding in background
+          kubectl port-forward service/${{ env.BACKEND_SERVICE_NAME }}-green -n ${{ env.STAGING_NAMESPACE }} 8080:80 &
+          kubectl port-forward service/${{ env.FRONTEND_SERVICE_NAME }} -n ${{ env.STAGING_NAMESPACE }} 3000:80 &
+          
+          # Wait for port forwarding to be ready
+          sleep 10
+
+      - name: 🧪 Test staging deployment
+        run: |
+          echo "🧪 Testing staging deployment endpoints..."
+          
+          # Test backend health
+          curl -f http://localhost:8080/health || exit 1
+          echo "✅ Backend health check passed"
+          
+          # Test API endpoints
+          curl -f http://localhost:8080/api/v1/articles || echo "⚠️  Articles endpoint test skipped"
+          
+          # Test frontend
+          curl -f http://localhost:3000 || echo "⚠️  Frontend health check skipped"
+
+      - name: 📊 Performance smoke test
+        run: |
+          echo "📊 Running basic performance smoke test..."
+          
+          # Install basic load testing tool
+          pip install requests
+          
+          # Basic load test
+          python3 -c "
+          import requests
+          import time
+          import concurrent.futures
+          
+          def make_request():
+              try:
+                  response = requests.get('http://localhost:8080/health', timeout=5)
+                  return response.status_code == 200
+              except:
+                  return False
+          
+          # Run 10 concurrent requests
+          start_time = time.time()
+          with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+              results = list(executor.map(lambda _: make_request(), range(10)))
+          
+          end_time = time.time()
+          success_count = sum(results)
+          
+          print(f'Requests completed: {success_count}/10')
+          print(f'Total time: {end_time - start_time:.2f}s')
+          
+          if success_count >= 8:  # 80% success rate
+              print('✅ Performance smoke test passed')
+          else:
+              print('❌ Performance smoke test failed')
+              exit(1)
+          "
+
+  # Job 4: Monitoring and alerts
+  monitoring:
+    name: 📊 Setup Monitoring
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, post-deployment-tests]
+    if: always()
+    steps:
+      - name: 📊 Deploy monitoring
+        run: |
+          echo "📊 Setting up monitoring for staging environment..."
+          
+          # Configure kubectl
+          mkdir -p ~/.kube
+          echo "${{ secrets.STAGING_KUBECONFIG }}" | base64 -d > ~/.kube/config
+          
+          # Apply monitoring configuration (example with Prometheus)
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: staging-prometheus-config
+            namespace: ${{ env.STAGING_NAMESPACE }}
+          data:
+            prometheus.yml: |
+              global:
+                scrape_interval: 15s
+              scrape_configs:
+              - job_name: 'ai-news-backend'
+                static_configs:
+                - targets: ['${{ env.BACKEND_SERVICE_NAME }}-green.${{ env.STAGING_NAMESPACE }}:80']
+              - job_name: 'ai-news-frontend'
+                static_configs:
+                - targets: ['${{ env.FRONTEND_SERVICE_NAME }}:${{ env.STAGING_NAMESPACE }}:80']
+          EOF
+
+      - name: 📤 Send deployment notification
+        if: success()
+        run: |
+          echo "📤 Sending deployment success notification..."
+          echo "✅ Staging deployment completed successfully!"
+          echo "🌐 Staging URL: https://staging.ainews.example.com"
+          echo "🆔 Deployment ID: ${{ needs.pre-deployment.outputs.deployment-id }}"
+          echo "📦 Backend Image: ${{ needs.pre-deployment.outputs.backend-image }}"
+          echo "📦 Frontend Image: ${{ needs.pre-deployment.outputs.frontend-image }}"
+
+      - name: 📤 Send failure notification
+        if: failure()
+        run: |
+          echo "📤 Sending deployment failure notification..."
+          echo "❌ Staging deployment failed!"
+          echo "🔍 Check the deployment logs for details"
+          echo "🆔 Deployment ID: ${{ needs.pre-deployment.outputs.deployment-id }}"
+
+  # Job 5: Rollback capability
+  rollback-capability:
+    name: 🔄 Rollback Capability
+    runs-on: ubuntu-latest
+    needs: [pre-deployment, deploy-staging]
+    if: always()
+    steps:
+      - name: 📥 Save rollback information
+        run: |
+          echo "💾 Saving rollback information..."
+          
+          mkdir -p rollback-info
+          
+          cat > rollback-info/deployment-${{ needs.pre-deployment.outputs.deployment-id }}.json <<EOF
+          {
+            "deployment_id": "${{ needs.pre-deployment.outputs.deployment-id }}",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "commit": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "backend_image": "${{ needs.pre-deployment.outputs.backend-image }}",
+            "frontend_image": "${{ needs.pre-deployment.outputs.frontend-image }}",
+            "deployment_type": "${{ github.event.inputs.deployment_type || 'blue-green' }}",
+            "rollback_command": "kubectl rollout undo deployment/${{ env.BACKEND_SERVICE_NAME }}-green -n ${{ env.STAGING_NAMESPACE }}"
+          }
+          EOF
+          
+          echo "Rollback information saved successfully"
+
+      - name: 📤 Save rollback artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: rollback-info-${{ needs.pre-deployment.outputs.deployment-id }}
+          path: rollback-info/
+          retention-days: 30

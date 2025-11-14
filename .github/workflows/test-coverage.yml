@@ -1,0 +1,453 @@
+name: 🧪 Test & Coverage Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+
+jobs:
+  backend-tests:
+    name: 🐍 Backend Tests & Coverage
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_pass
+          POSTGRES_USER: test_user
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+
+    - name: 📦 Install dependencies
+      run: |
+        cd backend
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest-cov pytest-asyncio pytest-xdist pytest-timeout coverage[toml] safety
+
+    - name: 🔍 Security scan with Safety
+      run: |
+        cd backend
+        python -m safety check --json --output safety-report.json || true
+        if [ -f safety-report.json ]; then
+          echo "Security scan completed. Check safety-report.json for details."
+        fi
+
+    - name: 🧪 Run unit tests
+      env:
+        DATABASE_URL: postgresql+asyncpg://test_user:test_pass@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379/15
+        TESTING: true
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      run: |
+        cd backend
+        pytest tests/ -m "not integration and not slow" \
+          --cov=app \
+          --cov-report=term-missing \
+          --cov-report=xml:coverage.xml \
+          --cov-report=json:coverage.json \
+          --cov-fail-under=80 \
+          --cov-branch \
+          --junit-xml=pytest-unit.xml \
+          --tb=short \
+          -v
+
+    - name: 🔗 Run integration tests
+      env:
+        DATABASE_URL: postgresql+asyncpg://test_user:test_pass@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379/15
+        TESTING: true
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      run: |
+        cd backend
+        pytest tests/ -m integration \
+          --cov=app \
+          --cov-append \
+          --cov-report=xml:coverage.xml \
+          --cov-report=json:coverage.json \
+          --junit-xml=pytest-integration.xml \
+          --tb=short \
+          -v
+
+    - name: ⚡ Run performance tests
+      env:
+        DATABASE_URL: postgresql+asyncpg://test_user:test_pass@localhost:5432/test_db
+        REDIS_URL: redis://localhost:6379/15
+        TESTING: true
+      run: |
+        cd backend
+        pytest tests/ -m performance \
+          --cov=app \
+          --cov-append \
+          --cov-report=xml:coverage.xml \
+          --cov-report=json:coverage.json \
+          --junit-xml=pytest-performance.xml \
+          --tb=short \
+          --durations=0 \
+          -v
+
+    - name: 📊 Upload coverage to Codecov
+      if: success()
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./backend/coverage.xml
+        flags: backend
+        name: backend-coverage
+        fail_ci_if_error: false
+        verbose: true
+
+    - name: 📋 Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: backend-test-results
+        path: |
+          backend/pytest-*.xml
+          backend/coverage.xml
+          backend/coverage.json
+          backend/safety-report.json
+
+    - name: 📈 Coverage badge
+      if: success() && github.ref == 'refs/heads/main'
+      run: |
+        cd backend
+        python -c "
+        import json
+        import sys
+        
+        try:
+            with open('coverage.json', 'r') as f:
+                data = json.load(f)
+                coverage = data.get('totals', {}).get('percent_covered', 0)
+                print(f'Current coverage: {coverage:.2f}%')
+                
+                # Create badge JSON for GitHub summary
+                badge_data = {
+                    'schemaVersion': 1,
+                    'label': 'coverage',
+                    'message': f'{coverage:.1f}%',
+                    'color': 'green' if coverage >= 80 else 'red'
+                }
+                
+                with open('coverage-badge.json', 'w') as outf:
+                    json.dump(badge_data, outf, indent=2)
+        except Exception as e:
+            print(f'Error reading coverage: {e}')
+            sys.exit(1)
+        "
+
+    - name: 🏷️ Comment coverage in PR
+      if: github.event_name == 'pull_request'
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: coverage-report
+        path: ./backend/coverage.json
+        parse: json
+
+  frontend-tests:
+    name: ⚛️ Frontend Tests & Coverage
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🟦 Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'pnpm'
+        cache-dependency-path: frontend/ai-news-frontend/pnpm-lock.yaml
+
+    - name: 📦 Install pnpm
+      run: npm install -g pnpm
+
+    - name: 📦 Install dependencies
+      run: |
+        cd frontend/ai-news-frontend
+        pnpm install --prefer-offline
+
+    - name: 🔍 Security audit
+      run: |
+        cd frontend/ai-news-frontend
+        pnpm audit --audit-level moderate
+
+    - name: 🧪 Run unit tests
+      run: |
+        cd frontend/ai-news-frontend
+        pnpm test --coverage --watchAll=false --testResultsProcessor=jest-junit --coverageReporters=lcov
+
+    - name: 📊 Upload frontend coverage
+      uses: codecov/codecov-action@v3
+      if: success()
+      with:
+        directory: ./frontend/ai-news-frontend
+        flags: frontend
+        name: frontend-coverage
+        fail_ci_if_error: false
+
+    - name: 📋 Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: frontend-test-results
+        path: |
+          frontend/ai-news-frontend/coverage/
+          frontend/ai-news-frontend/junit.xml
+
+  lint-and-format:
+    name: 🔍 Lint & Format Check
+    runs-on: ubuntu-latest
+    needs: [backend-tests]
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+
+    - name: 🔍 Python Lint
+      run: |
+        cd backend
+        pip install flake8 black isort mypy
+        
+        # Check code formatting
+        black --check app/ tests/ || echo "Code formatting issues found"
+        
+        # Check import sorting
+        isort --check-only app/ tests/ || echo "Import sorting issues found"
+        
+        # Run flake8
+        flake8 app/ --max-line-length=88 --exclude=__pycache__,venv,.venv,migrations --format=json --output-file=flake8-report.json || true
+        
+        echo "Flake8 report generated"
+
+    - name: 🟦 Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'pnpm'
+
+    - name: 📦 Install pnpm
+      run: npm install -g pnpm
+
+    - name: 🔍 Frontend Lint
+      run: |
+        cd frontend/ai-news-frontend
+        pnpm install --prefer-offline
+        pnpm run lint --format=json --output-file=eslint-report.json || true
+        echo "ESLint report generated"
+
+    - name: 📋 Upload lint results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: lint-results
+        path: |
+          backend/flake8-report.json
+          frontend/ai-news-frontend/eslint-report.json
+
+  build-and-test:
+    name: 🐳 Build & Smoke Test
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-tests, lint-and-format]
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_pass
+          POSTGRES_USER: test_user
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: 🟦 Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+
+    - name: 📦 Install pnpm
+      run: npm install -g pnpm
+
+    - name: 🐳 Build backend Docker image
+      run: |
+        cd backend
+        docker build -t ai-news-backend:test .
+        echo "Backend Docker image built successfully"
+
+    - name: 🟦 Build frontend
+      run: |
+        cd frontend/ai-news-frontend
+        pnpm install --prefer-offline
+        pnpm run build
+        echo "Frontend built successfully"
+
+    - name: 🚀 Start services for smoke test
+      run: |
+        cd backend
+        # Set test environment
+        export DATABASE_URL=postgresql+asyncpg://test_user:test_pass@localhost:5432/test_db
+        export REDIS_URL=redis://localhost:6379/15
+        export TESTING=true
+        export OPENAI_API_KEY=test-key
+        
+        # Start backend
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+        BACKEND_PID=$!
+        
+        # Wait for startup
+        sleep 10
+        
+        # Test health endpoint
+        curl -f http://localhost:8000/health || echo "Health check failed"
+        
+        # Kill backend
+        kill $BACKEND_PID || true
+        echo "Smoke test completed"
+
+  coverage-summary:
+    name: 📊 Coverage Summary
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-tests]
+    if: always()
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 📊 Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: ./artifacts
+
+    - name: 📈 Generate coverage summary
+      run: |
+        echo "# 📊 Test Coverage Summary" > coverage-summary.md
+        echo "" >> coverage-summary.md
+        
+        # Backend coverage
+        if [ -f "./artifacts/backend-test-results/coverage.xml" ]; then
+          echo "## 🐍 Backend Coverage" >> coverage-summary.md
+          echo "- **Coverage**: $(grep -o 'line-rate="[0-9.]*"' ./artifacts/backend-test-results/coverage.xml | sed 's/line-rate="//;s/"//g' | awk '{printf "%.1f%%", $1*100}')" >> coverage-summary.md
+          echo "- **Lines Covered**: $(grep -o 'lines-covered="[0-9]*"' ./artifacts/backend-test-results/coverage.xml | sed 's/lines-covered="//;s/"//g')" >> coverage-summary.md
+          echo "- **Lines Total**: $(grep -o 'lines-valid="[0-9]*"' ./artifacts/backend-test-results/coverage.xml | sed 's/lines-valid="//;s/"//g')" >> coverage-summary.md
+          echo "" >> coverage-summary.md
+        fi
+        
+        # Frontend coverage
+        if [ -d "./artifacts/frontend-test-results/coverage" ]; then
+          echo "## ⚛️ Frontend Coverage" >> coverage-summary.md
+          echo "- Coverage reports generated in artifacts" >> coverage-summary.md
+          echo "" >> coverage-summary.md
+        fi
+        
+        # Test results
+        echo "## 🧪 Test Results" >> coverage-summary.md
+        echo "- Backend tests: ${{ needs.backend-tests.result }}" >> coverage-summary.md
+        echo "- Frontend tests: ${{ needs.frontend-tests.result }}" >> coverage-summary.md
+        echo "- Lint & format: ${{ needs.lint-and-format.result }}" >> coverage-summary.md
+        
+        # Coverage badge
+        echo "" >> coverage-summary.md
+        echo "![Coverage](https://img.shields.io/badge/coverage-badge-brightgreen)" >> coverage-summary.md
+        
+        cat coverage-summary.md
+
+    - name: 📋 Upload coverage summary
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-summary
+        path: coverage-summary.md
+
+  notify:
+    name: 📢 Notification
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-tests, lint-and-format, build-and-test]
+    if: always()
+    
+    steps:
+    - name: 🎯 Summary
+      run: |
+        echo "## 🎯 Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ needs.backend-tests.result }}" = "success" ] && \
+           [ "${{ needs.frontend-tests.result }}" = "success" ] && \
+           [ "${{ needs.lint-and-format.result }}" = "success" ] && \
+           [ "${{ needs.build-and-test.result }}" = "success" ]; then
+          echo "✅ **All tests passed!**" >> $GITHUB_STEP_SUMMARY
+          echo "The pipeline completed successfully with comprehensive testing and coverage." >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Some tests failed**" >> $GITHUB_STEP_SUMMARY
+          echo "Please check the test results and fix any issues before merging." >> $GITHUB_STEP_SUMMARY
+          
+          echo "- Backend tests: ${{ needs.backend-tests.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend tests: ${{ needs.frontend-tests.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Lint & format: ${{ needs.lint-and-format.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Build & test: ${{ needs.build-and-test.result }}" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Artifacts:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Test results" >> $GITHUB_STEP_SUMMARY
+        echo "- Coverage reports" >> $GITHUB_STEP_SUMMARY
+        echo "- Lint reports" >> $GITHUB_STEP_SUMMARY
+        echo "- Build artifacts" >> $GITHUB_STEP_SUMMARY

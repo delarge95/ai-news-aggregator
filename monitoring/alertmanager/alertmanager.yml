@@ -1,0 +1,217 @@
+global:
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'alerts@ai-news.com'
+  smtp_auth_username: ''
+  smtp_auth_password: ''
+
+# Configuración de templates
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Ruta de enrutamiento de alertas
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'default-receiver'
+  routes:
+    # Alertas críticas - notificación inmediata
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 10s
+      repeat_interval: 5m
+    
+    # Alertas de backend
+    - match:
+        service: backend
+      receiver: 'backend-alerts'
+      group_wait: 30s
+      repeat_interval: 30m
+    
+    # Alertas de base de datos
+    - match:
+        service: database
+      receiver: 'database-alerts'
+      group_wait: 10s
+      repeat_interval: 15m
+    
+    # Alertas de sistema
+    - match:
+        service: system
+      receiver: 'system-alerts'
+      group_wait: 1m
+      repeat_interval: 2h
+    
+    # Alertas de AI pipeline
+    - match:
+        service: ai-pipeline
+      receiver: 'ai-pipeline-alerts'
+      group_wait: 30s
+      repeat_interval: 1h
+
+# Configuración de inhibición (evitar duplicación de alertas)
+inhibit_rules:
+  # Si backend está caído, inhibir alertas específicas del backend
+  - source_match:
+      alertname: 'BackendAPIUnreachable'
+    target_match:
+      alertname: ['HighAPILatency', 'HighServerErrorRate', 'HighRejectionRate']
+    equal: ['instance', 'service']
+
+  # Si Redis está caído, inhibir alertas de cache
+  - source_match:
+      alertname: 'RedisUnreachable'
+    target_match:
+      alertname: 'HighAPILatency'
+    equal: ['service']
+
+  # Si PostgreSQL está caído, inhibir alertas de base de datos
+  - source_match:
+      alertname: 'DatabaseUnreachable'
+    target_match:
+      alertname: ['SearchFailures', 'NoNewArticles']
+    equal: ['service']
+
+# Configuración de receptores
+receivers:
+  # Receptor por defecto
+  - name: 'default-receiver'
+    email_configs:
+      - to: 'admin@ai-news.com'
+        subject: 'Alerta AI News: {{ .GroupLabels.alertname }}'
+        body: |
+          {{ range .Alerts }}
+          Alerta: {{ .Annotations.summary }}
+          Descripción: {{ .Annotations.description }}
+          Labels: {{ .Labels }}
+          Inicio: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          {{ end }}
+
+  # Receptor para alertas críticas
+  - name: 'critical-alerts'
+    email_configs:
+      - to: 'admin@ai-news.com,ops@ai-news.com'
+        subject: '🚨 CRÍTICO - AI News: {{ .GroupLabels.alertname }}'
+        body: |
+          ALERTA CRÍTICA DETECTADA 🚨
+          
+          {{ range .Alerts }}
+          📍 Servicio: {{ .Labels.service }}
+          🔍 Alerta: {{ .Annotations.summary }}
+          📝 Descripción: {{ .Annotations.description }}
+          🏷️ Labels: {{ .Labels }}
+          ⏰ Inicio: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          {{ end }}
+          
+          🔗 Dashboards:
+          - Prometheus: http://localhost:9090
+          - Grafana: http://localhost:3000
+          - AlertManager: http://localhost:9093
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#alerts'
+        title: '🚨 Alerta Crítica - AI News'
+        text: |
+          {{ range .Alerts }}
+          *Alerta:* {{ .Annotations.summary }}
+          *Servicio:* {{ .Labels.service }}
+          *Descripción:* {{ .Annotations.description }}
+          *Tiempo:* {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          {{ end }}
+    discord_configs:
+      - webhook_url: 'https://discord.com/api/webhooks/YOUR/DISCORD/WEBHOOK'
+        title: '🚨 Alerta Crítica - AI News'
+        message: |
+          {{ range .Alerts }}
+          **Alerta:** {{ .Annotations.summary }}
+          **Servicio:** {{ .Labels.service }}
+          **Descripción:** {{ .Annotations.description }}
+          **Tiempo:** {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          {{ end }}
+
+  # Receptor para alertas de backend
+  - name: 'backend-alerts'
+    email_configs:
+      - to: 'dev-team@ai-news.com'
+        subject: 'Backend AI News: {{ .GroupLabels.alertname }}'
+        body: |
+          Alerta de Backend AI News
+          
+          {{ range .Alerts }}
+          📍 Alerta: {{ .Annotations.summary }}
+          📝 Descripción: {{ .Annotations.description }}
+          🏷️ Instancia: {{ .Labels.instance }}
+          ⏰ Inicio: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          {{ end }}
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#backend-alerts'
+        title: 'Backend AI News Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }} - {{ .Annotations.description }}{{ end }}'
+
+  # Receptor para alertas de base de datos
+  - name: 'database-alerts'
+    email_configs:
+      - to: 'dba@ai-news.com'
+        subject: 'Database AI News: {{ .GroupLabels.alertname }}'
+        body: |
+          Alerta de Base de Datos AI News
+          
+          {{ range .Alerts }}
+          📍 Alerta: {{ .Annotations.summary }}
+          📝 Descripción: {{ .Annotations.description }}
+          🏷️ Instancia: {{ .Labels.instance }}
+          ⏰ Inicio: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          {{ end }}
+
+  # Receptor para alertas de sistema
+  - name: 'system-alerts'
+    email_configs:
+      - to: 'ops@ai-news.com'
+        subject: 'Sistema AI News: {{ .GroupLabels.alertname }}'
+        body: |
+          Alerta de Sistema AI News
+          
+          {{ range .Alerts }}
+          📍 Alerta: {{ .Annotations.summary }}
+          📝 Descripción: {{ .Annotations.description }}
+          🏷️ Instancia: {{ .Labels.instance }}
+          ⏰ Inicio: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          {{ end }}
+
+  # Receptor para alertas de AI pipeline
+  - name: 'ai-pipeline-alerts'
+    email_configs:
+      - to: 'ai-team@ai-news.com'
+        subject: 'AI Pipeline AI News: {{ .GroupLabels.alertname }}'
+        body: |
+          Alerta de AI Pipeline AI News
+          
+          {{ range .Alerts }}
+          📍 Alerta: {{ .Annotations.summary }}
+          📝 Descripción: {{ .Annotations.description }}
+          🏷️ Pipeline: {{ .Labels.pipeline }}
+          ⏰ Inicio: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          {{ end }}
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#ai-pipeline'
+        title: 'AI Pipeline Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }} - {{ .Annotations.description }}{{ end }}'
+
+# Configuración de mute (silencio de alertas)
+mute_time_intervals:
+  - name: 'weekend'
+    time_intervals:
+      - weekdays: ['saturday', 'sunday']
+
+# Configuración de silence (silencios temporales)
+time_intervals:
+  - name: 'maintenance'
+    time_intervals:
+      - times:
+          - start_time: '02:00'
+            end_time: '04:00'
+        weekdays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']

@@ -1,0 +1,75 @@
+# Development Environment
+dev = {
+  do_token = "DO_DEV_TOKEN"
+  project_name = "ai-news-aggregator"
+  environment = "dev"
+  region = "nyc3"
+  domain = "dev.example.com"
+  subdomain = ""
+  droplet_size = "s-1vcpu-1gb"
+  web_droplets_count = 1
+  worker_droplets_count = 1
+  database_size = "db-s-1vcpu-1gb"
+  ssh_keys = ["~/.ssh/dev_key.pub"]
+}
+
+# Staging Environment
+staging = {
+  do_token = "DO_STAGING_TOKEN"
+  project_name = "ai-news-aggregator"
+  environment = "staging"
+  region = "nyc3"
+  domain = "staging.example.com"
+  subdomain = ""
+  droplet_size = "s-2vcpu-4gb"
+  web_droplets_count = 1
+  worker_droplets_count = 1
+  database_size = "db-s-2vcpu-4gb"
+  ssh_keys = ["~/.ssh/staging_key.pub"]
+}
+
+# Production Environment
+prod = {
+  do_token = "DO_PROD_TOKEN"
+  project_name = "ai-news-aggregator"
+  environment = "prod"
+  region = "nyc3"
+  domain = "example.com"
+  subdomain = ""
+  droplet_size = "s-4vcpu-8gb"
+  web_droplets_count = 3
+  worker_droplets_count = 2
+  database_size = "db-s-4vcpu-8gb"
+  ssh_keys = ["~/.ssh/prod_key.pub"]
+}
+
+# Reserved IPs (for static assignment)
+reserved_ips = {
+  web_1 = "203.0.113.1"
+  web_2 = "203.0.113.2"
+  web_3 = "203.0.113.3"
+  worker_1 = "203.0.113.4"
+  worker_2 = "203.0.113.5"
+}
+
+# Database backup retention
+backup_retention = {
+  daily_backups = 7
+  weekly_backups = 4
+  monthly_backups = 6
+}
+
+# Monitoring configuration
+monitoring = {
+  prometheus_port = 9090
+  grafana_port = 3000
+  node_exporter_port = 9100
+}
+
+# SSL/TLS configuration
+ssl = {
+  email = "admin@example.com"
+  cert_path = "/etc/letsencrypt/live"
+  auto_renewal = true
+  renewal_threshold_days = 30
+}

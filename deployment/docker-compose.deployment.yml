@@ -1,0 +1,509 @@
+# Docker Compose para Deployment Completo - AI News Aggregator
+# Incluye Nginx, Load Balancer, Certbot, Monitoreo y todos los servicios
+
+version: '3.8'
+
+services:
+  # Nginx Proxy Reverso con SSL y Seguridad
+  nginx-proxy:
+    image: nginx:1.25-alpine
+    container_name: ai_news_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/sites-enabled:/etc/nginx/sites-enabled:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./security/security-headers.conf:/etc/nginx/security-headers.conf:ro
+      - ./security/ddos-protection.conf:/etc/nginx/ddos-protection.conf:ro
+      - ./nginx/multi-domain-config.conf:/etc/nginx/multi-domain-config.conf:ro
+      - ./nginx/multi-domain-upstreams.conf:/etc/nginx/multi-domain-upstreams.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+      - /var/log/nginx:/var/log/nginx
+    depends_on:
+      - frontend
+      - backend
+      - haproxy
+    networks:
+      - ai_news_external
+      - ai_news_internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nginx.rule=Host(`ainews.production.ai`, `*.ainews.production.ai`)"
+      - "traefik.http.routers.nginx.entrypoints=websecure"
+      - "traefik.http.routers.nginx.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.redirect-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.redirect-https.redirectscheme.permanent=true"
+
+  # HAProxy Load Balancer
+  haproxy:
+    image: haproxy:2.8-alpine
+    container_name: ai_news_haproxy
+    restart: unless-stopped
+    ports:
+      - "8080:8404"  # Stats
+      - "8081:80"    # HTTP backup
+      - "8082:443"   # HTTPS backup
+    volumes:
+      - ./load-balancer/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - /etc/ssl/certs:/etc/ssl/certs:ro
+      - /var/log/haproxy:/var/log/haproxy
+    networks:
+      - ai_news_external
+      - ai_news_internal
+    healthcheck:
+      test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    security_opt:
+      - seccomp:unconfined
+    depends_on:
+      - frontend
+      - backend
+
+  # Certbot para Let's Encrypt
+  certbot:
+    image: certbot/certbot:latest
+    container_name: ai_news_certbot
+    restart: unless-stopped
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt
+      - /var/www/certbot:/var/www/certbot
+      - ./certbot/certbot.ini:/etc/letsencrypt/cli.ini:ro
+      - ./certbot/renew-certs.sh:/renew-certs.sh:ro
+    entrypoint: "/bin/sh -c 'while true; do sleep 12h; /renew-certs.sh; done;'"
+    networks:
+      - ai_news_internal
+    profiles:
+      - ssl
+
+  # Redis para caching y rate limiting
+  redis-cache:
+    image: redis:7-alpine
+    container_name: ai_news_redis_cache
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_cache_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - ai_news_internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+
+  # PostgreSQL para base de datos
+  postgres:
+    image: postgres:15-alpine
+    container_name: ai_news_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ai_news_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secure_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./database/backup:/backup
+    networks:
+      - ai_news_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - POSTGRES_DB=ai_news_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-secure_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Backend API (Instancia 1)
+  backend:
+    build:
+      context: ./../backend
+      dockerfile: Dockerfile
+    container_name: ai_news_backend_1
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-secure_password}@postgres:5432/ai_news_db
+      - REDIS_URL=redis://redis-cache:6379
+      - CELERY_BROKER_URL=redis://redis-cache:6379
+      - CELERY_RESULT_BACKEND=redis://redis-cache:6379
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./../backend:/app
+      - backend_logs:/app/logs
+    networks:
+      - ai_news_internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Backend API (Instancia 2)
+  backend-2:
+    build:
+      context: ./../backend
+      dockerfile: Dockerfile
+    container_name: ai_news_backend_2
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-secure_password}@postgres:5432/ai_news_db
+      - REDIS_URL=redis://redis-cache:6379
+      - CELERY_BROKER_URL=redis://redis-cache:6379
+      - CELERY_RESULT_BACKEND=redis://redis-cache:6379
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./../backend:/app
+      - backend_logs:/app/logs
+    networks:
+      - ai_news_internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Celery Worker
+  celery_worker:
+    build:
+      context: ./../backend
+      dockerfile: Dockerfile
+    container_name: ai_news_celery
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-secure_password}@postgres:5432/ai_news_db
+      - REDIS_URL=redis://redis-cache:6379
+      - CELERY_BROKER_URL=redis://redis-cache:6379
+      - CELERY_RESULT_BACKEND=redis://redis-cache:6379
+      - ENVIRONMENT=production
+    volumes:
+      - ./../backend:/app
+      - backend_logs:/app/logs
+    networks:
+      - ai_news_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+    command: celery -A app.celery worker --loglevel=info --concurrency=4
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+
+  # Celery Beat Scheduler
+  celery_beat:
+    build:
+      context: ./../backend
+      dockerfile: Dockerfile
+    container_name: ai_news_celery_beat
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-secure_password}@postgres:5432/ai_news_db
+      - REDIS_URL=redis://redis-cache:6379
+      - CELERY_BROKER_URL=redis://redis-cache:6379
+      - CELERY_RESULT_BACKEND=redis://redis-cache:6379
+      - ENVIRONMENT=production
+    volumes:
+      - ./../backend:/app
+      - backend_logs:/app/logs
+    networks:
+      - ai_news_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+    command: celery -A app.celery beat --loglevel=info
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+
+  # Frontend (Instancia 1)
+  frontend:
+    build:
+      context: ./../frontend
+      dockerfile: Dockerfile
+    container_name: ai_news_frontend_1
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./../frontend:/app
+      - /app/node_modules
+      - frontend_logs:/app/logs
+    environment:
+      - NODE_ENV=production
+      - REACT_APP_API_URL=https://api.ainews.production.ai/api/v1
+      - REACT_APP_ENVIRONMENT=production
+      - GENERATE_SOURCEMAP=false
+    networks:
+      - ai_news_internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # Frontend (Instancia 2)
+  frontend-2:
+    build:
+      context: ./../frontend
+      dockerfile: Dockerfile
+    container_name: ai_news_frontend_2
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+    volumes:
+      - ./../frontend:/app
+      - /app/node_modules
+      - frontend_logs:/app/logs
+    environment:
+      - NODE_ENV=production
+      - REACT_APP_API_URL=https://api.ainews.production.ai/api/v1
+      - REACT_APP_ENVIRONMENT=production
+      - GENERATE_SOURCEMAP=false
+    networks:
+      - ai_news_internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # Prometheus para monitoreo
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ai_news_prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    networks:
+      - ai_news_internal
+    profiles:
+      - monitoring
+
+  # Grafana para visualización
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ai_news_grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - ai_news_internal
+    profiles:
+      - monitoring
+
+  # Node Exporter para métricas del sistema
+  node_exporter:
+    image: prom/node-exporter:latest
+    container_name: ai_news_node_exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - ai_news_internal
+    profiles:
+      - monitoring
+
+  # Backup database service
+  postgres_backup:
+    image: postgres:15-alpine
+    container_name: ai_news_db_backup
+    restart: "no"
+    environment:
+      - PGUSER=postgres
+      - PGPASSWORD=${POSTGRES_PASSWORD:-secure_password}
+    volumes:
+      - ./database/backup:/backup
+      - postgres_data:/var/lib/postgresql/data:ro
+    command: pg_dump -h postgres -U postgres -d ai_news_db > /backup/backup_$(date +%Y%m%d_%H%M%S).sql
+    networks:
+      - ai_news_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - backup
+
+  # Log aggregation
+  fluentd:
+    image: fluent/fluentd:latest
+    container_name: ai_news_fluentd
+    restart: unless-stopped
+    ports:
+      - "24224:24224"
+      - "24224:24224/udp"
+    volumes:
+      - ./logs/fluentd.conf:/fluentd/etc/fluent.conf:ro
+      - ./logs:/var/log
+    networks:
+      - ai_news_internal
+    profiles:
+      - monitoring
+
+volumes:
+  postgres_data:
+  redis_cache_data:
+  backend_logs:
+  frontend_logs:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  ai_news_external:
+    external: true
+  ai_news_internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

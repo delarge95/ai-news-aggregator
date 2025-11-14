@@ -1,0 +1,58 @@
+# Nginx Security Configuration
+
+# Hide server information
+server_tokens off;
+
+# Prevent access to sensitive files
+location ~ /\. {
+    deny all;
+    access_log off;
+    log_not_found off;
+}
+
+location ~ ~$ {
+    deny all;
+    access_log off;
+    log_not_found off;
+}
+
+location ~ \.(ini|env|log|sql|bak)$ {
+    deny all;
+    access_log off;
+    log_not_found off;
+}
+
+# Prevent access to backup files
+location ~ \.(bak|backup|old|orig)$ {
+    deny all;
+    access_log off;
+    log_not_found off;
+}
+
+# Disable access to version control directories
+location ~ \.(git|svn|hg) {
+    deny all;
+    access_log off;
+    log_not_found off;
+}
+
+# Block access to nginx configuration files
+location ~ /nginx.conf$ {
+    deny all;
+    access_log off;
+    log_not_found off;
+}
+
+# Limit request methods
+if ($request_method !~ ^(GET|HEAD|POST|PUT|DELETE|OPTIONS)$ ) {
+    return 444;
+}
+
+# Prevent clickjacking
+add_header X-Frame-Options SAMEORIGIN;
+
+# Remove Server header
+more_clear_headers "Server";
+
+# Disable server signature
+server_tokens off;

@@ -1,0 +1,136 @@
+# Prometheus Configuration for AI News Aggregator
+# Global configuration
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'ai-news-aggregator'
+    environment: 'production'
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# Rule files for alerting
+rule_files:
+  - "alert_rules.yml"
+  - "recording_rules.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  # Node exporter for system metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+    scrape_interval: 30s
+    metrics_path: /metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'ai-news-aggregator'
+
+  # AI News Aggregator Web Application
+  - job_name: 'ai-news-web'
+    static_configs:
+      - targets: ['localhost:8000']
+    scrape_interval: 30s
+    metrics_path: /metrics
+    params:
+      format: ['prometheus']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'ai-news-web'
+      - source_labels: [__address__]
+        target_label: service
+        replacement: 'web'
+
+  # Celery Worker metrics
+  - job_name: 'celery-worker'
+    static_configs:
+      - targets: ['localhost:8001']
+    scrape_interval: 30s
+    metrics_path: /metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'celery-worker'
+
+  # Database monitoring (PostgreSQL exporter)
+  - job_name: 'postgresql'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 60s
+    metrics_path: /metrics
+
+  # Redis monitoring (Redis exporter)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  # Nginx metrics
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['localhost:9113']
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  # Docker daemon metrics
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['localhost:9323']
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  # Load balancer metrics (if available)
+  - job_name: 'load-balancer'
+    static_configs:
+      - targets: ['lb:80']
+    scrape_interval: 60s
+    metrics_path: /nginx_status
+    params:
+      format: ['prometheus']
+
+  # Blackbox exporter for endpoint monitoring
+  - job_name: 'blackbox'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+        - http://localhost:80/health
+        - https://ai-news-aggregator.com/health
+        - https://ai-news-aggregator.com/api/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+# Remote write configuration (optional - for long-term storage)
+# remote_write:
+#   - url: "https://prometheus-remote-write.example.com/api/v1/write"
+#     queue_config:
+#       max_samples_per_send: 1000
+#       max_shards: 200
+#       capacity: 2500
+
+# Storage configuration
+storage:
+  tsdb:
+    retention.time: 30d
+    retention.size: 10GB

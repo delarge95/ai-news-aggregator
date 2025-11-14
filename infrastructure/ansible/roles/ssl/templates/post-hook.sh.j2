@@ -1,0 +1,27 @@
+#!/bin/bash
+# Let's Encrypt Post-Hook Script
+# Starts nginx after certificate renewal
+
+set -e
+
+echo "Let's Encrypt post-hook: Starting nginx..."
+systemctl start nginx
+
+# Verify SSL certificates
+echo "Verifying SSL certificates..."
+if [ -f "/etc/letsencrypt/live/{{ domain_name }}/cert.pem" ]; then
+    echo "Certificate verification successful"
+    openssl x509 -in /etc/letsencrypt/live/{{ domain_name }}/cert.pem -noout -dates
+    
+    # Update nginx SSL certificate paths
+    if [ -f "{{ ssl_cert_path }}" ]; then
+        echo "Updating Nginx SSL configuration..."
+        # The nginx configuration should already be pointing to the correct paths
+        systemctl reload nginx
+    fi
+else
+    echo "ERROR: Certificate files not found!"
+    exit 1
+fi
+
+echo "Post-hook completed successfully."

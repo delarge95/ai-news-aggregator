@@ -1,0 +1,182 @@
+groups:
+  - name: ai-news-critical-alerts
+    rules:
+      # Backend API no disponible
+      - alert: BackendAPIUnreachable
+        expr: up{job="ai-news-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: backend
+        annotations:
+          summary: "Backend API no está disponible"
+          description: "Backend API ha estado fuera de línea por más de 1 minuto"
+
+      # Alta latencia en API
+      - alert: HighAPILatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="ai-news-backend"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: "Alta latencia en API"
+          description: "Latencia p95 de {{ $value }}s excede 2s por más de 5 minutos"
+
+      # Muchas errores 5xx
+      - alert: HighServerErrorRate
+        expr: rate(http_requests_total{job="ai-news-backend",status=~"5.."}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          service: backend
+        annotations:
+          summary: "Alta tasa de errores del servidor"
+          description: "Tasa de errores 5xx: {{ $value }}req/s por más de 5 minutos"
+
+      # Base de datos no disponible
+      - alert: DatabaseUnreachable
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: database
+        annotations:
+          summary: "Base de datos no está disponible"
+          description: "PostgreSQL ha estado fuera de línea por más de 1 minuto"
+
+      # Redis no disponible
+      - alert: RedisUnreachable
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: cache
+        annotations:
+          summary: "Redis no está disponible"
+          description: "Redis ha estado fuera de línea por más de 1 minuto"
+
+      # Uso de disco alto
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_size_bytes - node_filesystem_free_bytes) / node_filesystem_size_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "Espacio en disco bajo"
+          description: "Uso de disco en {{ $labels.instance }}: {{ $value | humanizePercentage }}"
+
+      # Uso de memoria alto
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "Alto uso de memoria"
+          description: "Uso de memoria en {{ $labels.instance }}: {{ $value | humanizePercentage }}"
+
+      # CPU alta
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "Alto uso de CPU"
+          description: "Uso de CPU en {{ $labels.instance }}: {{ $value }}%"
+
+      # Muchos contenedores caído
+      - alert: ContainerDown
+        expr: up{job="cadvisor"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: containers
+        annotations:
+          summary: "Contenedor de monitoring no disponible"
+          description: "cAdvisor no responde por más de 2 minutos"
+
+  - name: ai-news-performance-alerts
+    rules:
+      # Respuestas lentas del frontend
+      - alert: SlowFrontendResponses
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="frontend"}[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: frontend
+        annotations:
+          summary: "Frontend responde lentamente"
+          description: "Latencia p95 del frontend: {{ $value }}s"
+
+      # Muchas peticiones rechazadas
+      - alert: HighRejectionRate
+        expr: rate(http_requests_total{job="ai-news-backend",status="429"}[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: "Alta tasa de peticiones rechazadas"
+          description: "Tasa de rate limiting: {{ $value }}req/s"
+
+      # Tareas Celery en cola por mucho tiempo
+      - alert: CeleryTaskBacklog
+        expr: celery_redis_queue_length > 1000
+        for: 10m
+        labels:
+          severity: warning
+          service: celery
+        annotations:
+          summary: "Muchas tareas Celery en cola"
+          description: "Longitud de cola: {{ $value }} tareas"
+
+      # Tareas Celery fallando
+      - alert: CeleryTaskFailures
+        expr: rate(celery_tasks_failed_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: celery
+        annotations:
+          summary: "Tareas Celery fallando"
+          description: "Tasa de fallos: {{ $value }} tareas/s"
+
+  - name: ai-news-business-alerts
+    rules:
+      # No hay noticias nuevas
+      - alert: NoNewArticles
+        expr: rate(ai_news_articles_total[1h]) == 0
+        for: 30m
+        labels:
+          severity: warning
+          service: ai-pipeline
+        annotations:
+          summary: "No se están creando noticias nuevas"
+          description: "No hay artículos nuevos por más de 30 minutos"
+
+      # Errores en pipeline de AI
+      - alert: AIPipelineErrors
+        expr: rate(ai_pipeline_errors_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: ai-pipeline
+        annotations:
+          summary: "Errores en pipeline de AI"
+          description: "Tasa de errores en AI: {{ $value }} errores/s"
+
+      # Búsquedas fallando
+      - alert: SearchFailures
+        expr: rate(search_requests_total{status="error"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: search
+        annotations:
+          summary: "Búsquedas fallando"
+          description: "Tasa de fallos en búsqueda: {{ $value }} errores/s"

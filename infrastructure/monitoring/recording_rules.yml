@@ -1,0 +1,211 @@
+# Prometheus Recording Rules
+# Pre-computed metrics for faster queries and dashboards
+
+groups:
+  - name: ai-news-aggregator-recording.rules
+    interval: 30s
+    rules:
+      # HTTP request rate and error rate
+      - record: ai_news:http_requests:rate5m
+        expr: |
+          sum(rate(http_requests_total{job="ai-news-web"}[5m])) by (status)
+
+      - record: ai_news:http_requests:error_rate5m
+        expr: |
+          sum(rate(http_requests_total{job="ai-news-web",status=~"5.."}[5m])) /
+          sum(rate(http_requests_total{job="ai-news-web"}[5m]))
+
+      # Response time percentiles
+      - record: ai_news:http_request_duration:p95_5m
+        expr: |
+          histogram_quantile(0.95, 
+            sum(rate(http_request_duration_seconds_bucket{job="ai-news-web"}[5m])) by (le)
+          )
+
+      - record: ai_news:http_request_duration:p99_5m
+        expr: |
+          histogram_quantile(0.99, 
+            sum(rate(http_request_duration_seconds_bucket{job="ai-news-web"}[5m])) by (le)
+          )
+
+      # Top endpoints by request rate
+      - record: ai_news:top_endpoints:rate5m
+        expr: |
+          topk(10, 
+            sum(rate(http_requests_total{job="ai-news-web"}[5m])) by (endpoint)
+          )
+
+      # Database connection pool usage
+      - record: ai_news:db_connections:used_ratio
+        expr: |
+          pg_stat_activity_count / pg_settings_max_connections
+
+      # Celery queue lengths
+      - record: ai_news:celery_queue:length
+        expr: |
+          sum(celery_queue_length) by (queue)
+
+      - record: ai_news:celery_tasks:rate5m
+        expr: |
+          sum(rate(celery_tasks_total[5m])) by (state)
+
+  - name: system-recording.rules
+    interval: 30s
+    rules:
+      # CPU usage rates
+      - record: system:cpu_usage:rate5m
+        expr: |
+          100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+
+      # Memory usage rates
+      - record: system:memory:usage_percent
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100
+
+      - record: system:memory:usage_bytes
+        expr: |
+          node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes
+
+      # Disk I/O rates
+      - record: system:disk:read_bytes_rate5m
+        expr: |
+          sum(rate(node_disk_read_bytes_total[5m])) by (instance, device)
+
+      - record: system:disk:write_bytes_rate5m
+        expr: |
+          sum(rate(node_disk_written_bytes_total[5m])) by (instance, device)
+
+      # Network I/O rates
+      - record: system:network:rx_bytes_rate5m
+        expr: |
+          sum(rate(node_network_receive_bytes_total{device!~"lo|docker0|br-.*"}[5m])) by (instance)
+
+      - record: system:network:tx_bytes_rate5m
+        expr: |
+          sum(rate(node_network_transmit_bytes_total{device!~"lo|docker0|br-.*"}[5m])) by (instance)
+
+      # Load average normalized by CPU count
+      - record: system:load:normalized
+        expr: |
+          node_load1 / count(node_cpu_seconds_total{mode="idle"}) by (instance)
+
+  - name: infrastructure-recording.rules
+    interval: 60s
+    rules:
+      # Service availability (uptime)
+      - record: service:uptime:1h
+        expr: |
+          avg_over_time(up{job=~"ai-news-web|postgresql|redis"}[1h])
+
+      # Average response times per service
+      - record: service:response_time:p95_5m
+        expr: |
+          histogram_quantile(0.95, 
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, service)
+          )
+
+      # Request throughput per service
+      - record: service:throughput:rate5m
+        expr: |
+          sum(rate(http_requests_total[5m])) by (service)
+
+      # Error rates per service
+      - record: service:error_rate:rate5m
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m])) by (service) /
+          sum(rate(http_requests_total[5m])) by (service)
+
+  - name: business-metrics.rules
+    interval: 60s
+    rules:
+      # Articles processing metrics
+      - record: articles:processed:rate1h
+        expr: |
+          sum(rate(articles_processed_total[1h]))
+
+      - record: articles:processing_time:p95_1h
+        expr: |
+          histogram_quantile(0.95, 
+            sum(rate(article_processing_duration_seconds_bucket[1h])) by (le)
+          )
+
+      # User activity metrics
+      - record: users:active:hourly
+        expr: |
+          count(count by (user_id) (http_requests_total{endpoint="/api/article"}))
+
+      - record: users:new:rate1d
+        expr: |
+          increase(users_created_total[1d])
+
+      # AI model performance
+      - record: ai:model:processing_time:p95_1h
+        expr: |
+          histogram_quantile(0.95, 
+            sum(rate(ai_model_processing_time_seconds_bucket[1h])) by (le, model)
+          )
+
+      - record: ai:model:accuracy:rate1h
+        expr: |
+          sum(rate(ai_model_predictions_total{correct="true"}[1h])) by (model) /
+          sum(rate(ai_model_predictions_total[1h])) by (model)
+
+  - name: capacity-planning.rules
+    interval: 300s
+    rules:
+      # Capacity trends
+      - record: capacity:cpu_trend:7d
+        expr: |
+          avg_over_time(system:cpu_usage:rate5m[7d])
+
+      - record: capacity:memory_trend:7d
+        expr: |
+          avg_over_time(system:memory:usage_percent[7d])
+
+      - record: capacity:disk_trend:7d
+        expr: |
+          avg_over_time(node_filesystem_usage_percent[7d])
+
+      # Predictive capacity warnings
+      - record: capacity:predicted_disk_full:30d
+        expr: |
+          predict_linear(node_filesystem_avail_bytes[7d], 30*24*60*60) < 0
+
+      - record: capacity:predicted_memory_pressure:7d
+        expr: |
+          predict_linear(system:memory:usage_percent[1d], 7*24*60*60) > 90
+
+  - name: security-recording.rules
+    interval: 60s
+    rules:
+      # Security metrics
+      - record: security:failed_logins:rate5m
+        expr: |
+          sum(rate(http_requests_total{endpoint="/api/auth/login",status="401"}[5m]))
+
+      - record: security:ip_blocked:rate1h
+        expr: |
+          sum(rate(fail2ban_banned_ips_total[1h]))
+
+      - record: security:ssl_cert_expiry_days
+        expr: |
+          (ssl_certificate_expiry_seconds - time()) / 86400
+
+  - name: sla-rules
+    interval: 60s
+    rules:
+      # SLA metrics
+      - record: sla:availability:24h
+        expr: |
+          avg_over_time(up{job="ai-news-web"}[24h]) * 100
+
+      - record: sla:response_time_slo:95th
+        expr: |
+          histogram_quantile(0.95, 
+            sum(rate(http_request_duration_seconds_bucket{job="ai-news-web"}[24h])) by (le)
+          )
+
+      - record: sla:error_rate_slo:24h
+        expr: |
+          sum(rate(http_requests_total{job="ai-news-web",status=~"5.."}[24h])) /
+          sum(rate(http_requests_total{job="ai-news-web"}[24h])) * 100

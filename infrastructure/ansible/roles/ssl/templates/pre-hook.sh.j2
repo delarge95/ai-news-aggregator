@@ -1,0 +1,16 @@
+#!/bin/bash
+# Let's Encrypt Pre-Hook Script
+# Stops nginx before certificate renewal
+
+set -e
+
+echo "Let's Encrypt pre-hook: Stopping nginx..."
+systemctl stop nginx
+
+# Create backup of current certificates if they exist
+if [ -d "/etc/letsencrypt/live/{{ domain_name }}" ]; then
+    echo "Creating backup of current certificates..."
+    cp -r /etc/letsencrypt/live/{{ domain_name }} /etc/letsencrypt/live/{{ domain_name }}.backup.$(date +%Y%m%d_%H%M%S)
+fi
+
+echo "Pre-hook completed successfully."

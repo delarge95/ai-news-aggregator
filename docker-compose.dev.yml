@@ -1,0 +1,47 @@
+# Development Override Configuration
+# Run with: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+version: "3.8"
+
+services:
+  postgres:
+    environment:
+      POSTGRES_DB: ai_news_dev
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+    ports:
+      - "5433:5432"
+
+  redis:
+    ports:
+      - "6380:6379"
+
+  backend:
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://dev:dev@postgres:5432/ai_news_dev
+      - REDIS_URL=redis://redis:6379
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./backend:/app
+      - backend_logs:/app/logs
+
+  celery_worker:
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://dev:dev@postgres:5432/ai_news_dev
+      - REDIS_URL=redis://redis:6379
+
+  celery_beat:
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://dev:dev@postgres:5432/ai_news_dev
+      - REDIS_URL=redis://redis:6379
+
+  frontend:
+    ports:
+      - "3001:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8001/api/v1
+
+volumes:
+  backend_logs:

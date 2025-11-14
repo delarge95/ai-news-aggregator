@@ -1,0 +1,100 @@
+---
+# Ansible Role: SSL/TLS Configuration with Let's Encrypt
+# Description: Automated SSL certificate management using Certbot
+
+- name: Install Certbot
+  apt:
+    name:
+      - certbot
+      - python3-certbot-nginx
+    state: present
+
+- name: Create SSL directory
+  file:
+    path: "{{ ssl_directory | default('/etc/ssl/ai-news') }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Create Certbot hooks directory
+  file:
+    path: /etc/letsencrypt/hooks
+    state: directory
+    mode: '0755'
+
+- name: Deploy pre-hook script
+  template:
+    src: pre-hook.sh.j2
+    dest: /etc/letsencrypt/hooks/pre-hook.sh
+    mode: '0755'
+    owner: root
+    group: root
+  when: ssl_auto_renewal | default(true)
+
+- name: Deploy post-hook script
+  template:
+    src: post-hook.sh.j2
+    dest: /etc/letsencrypt/hooks/post-hook.sh
+    mode: '0755'
+    owner: root
+    group: root
+  when: ssl_auto_renewal | default(true)
+
+- name: Obtain SSL certificates
+  certbot:
+    email: "{{ ssl_email }}"
+    domains: "{{ ssl_domains | default([domain_name]) }}"
+    cert_path: "{{ ssl_cert_path | default('/etc/ssl/ai-news/fullchain.pem') }}"
+    key_path: "{{ ssl_key_path | default('/etc/ssl/ai-news/privkey.pem') }}"
+    chain_path: "{{ ssl_chain_path | default('/etc/ssl/ai-news/chain.pem') }}"
+    fullchain_path: "{{ ssl_fullchain_path | default('/etc/ssl/ai-news/fullchain.pem') }}"
+    webroot_path: "{{ ssl_webroot_path | default('/var/www/html') }}"
+    expand: "{{ ssl_expand | default(false) }}"
+    keep_until_expiring: "{{ ssl_keep_until_expiring | default(true) }}"
+    force_renewal: "{{ ssl_force_renewal | default(false) }}"
+    agree_tos: true
+    non_interactive: true
+    nginx_server_root: /etc/nginx
+    nginx_domains: "{{ ssl_domains | default([domain_name]) }}"
+  when: ssl_setup_certificate | default(true)
+
+- name: Set up automatic renewal
+  cron:
+    name: "Certbot auto-renewal"
+    minute: "30"
+    hour: "2"
+    day: "*/2"
+    job: "certbot renew --quiet --post-hook 'systemctl reload nginx'"
+    user: root
+  when: ssl_auto_renewal | default(true)
+
+- name: Verify certificate expiration
+  command: "openssl x509 -in {{ ssl_cert_path | default('/etc/ssl/ai-news/fullchain.pem') }} -noout -dates"
+  register: cert_info
+  changed_when: false
+
+- name: Display certificate information
+  debug:
+    msg: |
+      Certificate Info:
+      {{ cert_info.stdout }}
+  when: cert_info.changed
+
+- name: Create SSL health check script
+  template:
+    src: ssl-health-check.sh.j2
+    dest: "{{ project_root }}/scripts/ssl-health-check.sh"
+    mode: '0755'
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+  when: ssl_setup_certificate | default(true)
+
+- name: Install SSL monitoring script
+  cron:
+    name: "SSL certificate health check"
+    minute: "0"
+    hour: "6"
+    job: "{{ project_root }}/scripts/ssl-health-check.sh"
+    user: root
+  when: ssl_auto_renewal | default(true)

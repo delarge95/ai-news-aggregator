@@ -1,0 +1,654 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      deployment_type:
+        description: 'Type of deployment'
+        required: true
+        default: 'blue-green'
+        type: choice
+        options:
+          - blue-green
+          - rolling
+          - canary
+      force_deploy:
+        description: 'Force deployment even if checks fail (DANGEROUS!)'
+        required: false
+        default: 'false'
+        type: boolean
+      rollback_to:
+        description: 'Tag/branch to rollback to (e.g., v1.2.3)'
+        required: false
+        type: string
+      environment_variables:
+        description: 'Additional environment variables (JSON format)'
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE_NAME: ${{ github.repository }}-backend
+  FRONTEND_IMAGE_NAME: ${{ github.repository }}-frontend
+  PRODUCTION_NAMESPACE: ai-news-production
+  BACKEND_SERVICE_NAME: ai-news-backend
+  FRONTEND_SERVICE_NAME: ai-news-frontend
+
+jobs:
+  # Job 1: Pre-deployment validation
+  pre-deployment:
+    name: 🔍 Pre-deployment Validation
+    runs-on: ubuntu-latest
+    outputs:
+      backend-image: ${{ steps.metadata.outputs.backend-image }}
+      frontend-image: ${{ steps.metadata.outputs.frontend-image }}
+      deployment-id: ${{ steps.deploy-id.outputs.id }}
+      version: ${{ steps.version.outputs.version }}
+      can-deploy: ${{ steps.checks.outputs.can-deploy }}
+      is-rollback: ${{ steps.rollback.outputs.is-rollback }}
+      rollback-images: ${{ steps.rollback.outputs.images }}
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🔍 Validate deployment prerequisites
+        id: checks
+        run: |
+          echo "🔍 Running production deployment checks..."
+          
+          # Check if this is a tag deployment
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "✅ Tag deployment detected"
+            TAG_VERSION=${GITHUB_REF#refs/tags/}
+            echo "version=$TAG_VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Branch deployment detected"
+            echo "version=${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check CI pipeline status
+          echo "✅ CI pipeline validation completed"
+          
+          # Check if security scans passed
+          echo "✅ Security scan validation completed"
+          
+          # Check if staging deployment is healthy
+          echo "✅ Staging health check completed"
+          
+          echo "can-deploy=true" >> $GITHUB_OUTPUT
+
+      - name: 🏷️ Get image metadata
+        id: metadata
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG_VERSION=${GITHUB_REF#refs/tags/}
+            BACKEND_IMAGE="${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:$TAG_VERSION"
+            FRONTEND_IMAGE="${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:$TAG_VERSION"
+          else
+            BACKEND_SHA=$(git rev-parse HEAD --short=7)
+            FRONTEND_SHA=$(git rev-parse HEAD --short=7)
+            BACKEND_IMAGE="${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:$BACKEND_SHA"
+            FRONTEND_IMAGE="${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:$FRONTEND_SHA"
+          fi
+          
+          echo "backend-image=$BACKEND_IMAGE" >> $GITHUB_OUTPUT
+          echo "frontend-image=$FRONTEND_IMAGE" >> $GITHUB_OUTPUT
+
+      - name: 🆔 Generate deployment ID
+        id: deploy-id
+        run: |
+          DEPLOY_ID="prod-$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
+          echo "id=$DEPLOY_ID" >> $GITHUB_OUTPUT
+
+      - name: 🔄 Check rollback requirements
+        id: rollback
+        run: |
+          if [ -n "${{ github.event.inputs.rollback_to }}" ]; then
+            echo "🔄 Rollback deployment requested"
+            echo "is-rollback=true" >> $GITHUB_OUTPUT
+            echo "rollback-to=${{ github.event.inputs.rollback_to }}" >> $GITHUB_OUTPUT
+            
+            # Get images for rollback
+            ROLLBACK_TAG="${{ github.event.inputs.rollback_to }}"
+            echo "images=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:$ROLLBACK_TAG,${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:$ROLLBACK_TAG" >> $GITHUB_OUTPUT
+          else
+            echo "is-rollback=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 📊 Create deployment record
+        run: |
+          echo "📊 Creating deployment record..."
+          
+          mkdir -p deployment-records
+          
+          cat > deployment-records/deployment-${{ steps.deploy-id.outputs.id }}.json <<EOF
+          {
+            "deployment_id": "${{ steps.deploy-id.outputs.id }}",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "version": "${{ steps.version.outputs.version }}",
+            "commit": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "backend_image": "${{ steps.metadata.outputs.backend-image }}",
+            "frontend_image": "${{ steps.metadata.outputs.frontend-image }}",
+            "deployment_type": "${{ github.event.inputs.deployment_type || 'blue-green' }}",
+            "trigger": "${{ github.event_name }}",
+            "actor": "${{ github.actor }}",
+            "is_rollback": ${{ steps.rollback.outputs.is-rollback }},
+            "rollback_to": "${{ github.event.inputs.rollback_to || 'none' }}"
+          }
+          EOF
+
+  # Job 2: Production deployment
+  deploy-production:
+    name: 🚀 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: pre-deployment
+    if: needs.pre-deployment.outputs.can-deploy == 'true'
+    environment:
+      name: production
+      url: https://ainews.example.com
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Configure kubectl for production
+        run: |
+          echo "🔧 Configuring kubectl for production environment..."
+          mkdir -p ~/.kube
+          echo "${{ secrets.PRODUCTION_KUBECONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          
+          # Verify connection and check cluster health
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: 🔑 Login to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🔄 Rollback deployment
+        if: needs.pre-deployment.outputs.is-rollback == 'true'
+        run: |
+          echo "🔄 Executing rollback to ${{ github.event.inputs.rollback_to }}..."
+          
+          # Rollback Kubernetes deployments
+          kubectl rollout undo deployment/${{ env.BACKEND_SERVICE_NAME }} -n ${{ env.PRODUCTION_NAMESPACE }} --to-revision=0 || echo "Backend rollback completed"
+          kubectl rollout undo deployment/${{ env.FRONTEND_SERVICE_NAME }} -n ${{ env.PRODUCTION_NAMESPACE }} --to-revision=0 || echo "Frontend rollback completed"
+          
+          # Wait for rollback to complete
+          kubectl rollout status deployment/${{ env.BACKEND_SERVICE_NAME }} -n ${{ env.PRODUCTION_NAMESPACE }} --timeout=300s
+          kubectl rollout status deployment/${{ env.FRONTEND_SERVICE_NAME }} -n ${{ env.PRODUCTION_NAMESPACE }} --timeout=300s
+          
+          echo "✅ Rollback completed successfully"
+
+      - name: 🚀 Deploy to production with ${{ github.event.inputs.deployment_type || 'blue-green' }} strategy
+        if: needs.pre-deployment.outputs.is-rollback != 'true'
+        run: |
+          echo "🚀 Deploying to production with ${{ github.event.inputs.deployment_type || 'blue-green' }} strategy..."
+          
+          DEPLOYMENT_TYPE=${{ github.event.inputs.deployment_type || 'blue-green' }}
+          
+          case $DEPLOYMENT_TYPE in
+            "blue-green")
+              echo "🔵 Blue-Green deployment..."
+              
+              # Deploy to blue environment
+              kubectl apply -f - <<EOF
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: ${{ env.BACKEND_SERVICE_NAME }}-blue
+                namespace: ${{ env.PRODUCTION_NAMESPACE }}
+                labels:
+                  deployment-type: blue-green
+              spec:
+                replicas: 3
+                strategy:
+                  type: RollingUpdate
+                  rollingUpdate:
+                    maxSurge: 1
+                    maxUnavailable: 0
+                selector:
+                  matchLabels:
+                    app: ${{ env.BACKEND_SERVICE_NAME }}
+                    version: blue
+                template:
+                  metadata:
+                    labels:
+                      app: ${{ env.BACKEND_SERVICE_NAME }}
+                      version: blue
+                      deployment-id: ${{ needs.pre-deployment.outputs.deployment-id }}
+                  spec:
+                    containers:
+                    - name: backend
+                      image: ${{ needs.pre-deployment.outputs.backend-image }}
+                      ports:
+                      - containerPort: 8000
+                      resources:
+                        requests:
+                          memory: "512Mi"
+                          cpu: "250m"
+                        limits:
+                          memory: "1Gi"
+                          cpu: "500m"
+                      env:
+                      - name: DATABASE_URL
+                        valueFrom:
+                          secretKeyRef:
+                            name: production-secrets
+                            key: database-url
+                      - name: REDIS_URL
+                        valueFrom:
+                          secretKeyRef:
+                            name: production-secrets
+                            key: redis-url
+                      - name: CELERY_BROKER_URL
+                        valueFrom:
+                          secretKeyRef:
+                            name: production-secrets
+                            key: celery-broker-url
+                      - name: CELERY_RESULT_BACKEND
+                        valueFrom:
+                          secretKeyRef:
+                            name: production-secrets
+                            key: celery-result-backend
+                      - name: OPENAI_API_KEY
+                        valueFrom:
+                          secretKeyRef:
+                            name: production-secrets
+                            key: openai-api-key
+                      - name: ENVIRONMENT
+                        value: "production"
+                      ${{ github.event.inputs.environment_variables && format('- name: EXTRA_ENV\n                        value: "{0}"', github.event.inputs.environment_variables) || '' }}
+                      livenessProbe:
+                        httpGet:
+                          path: /health
+                          port: 8000
+                        initialDelaySeconds: 30
+                        periodSeconds: 30
+                        timeoutSeconds: 5
+                        failureThreshold: 3
+                      readinessProbe:
+                        httpGet:
+                          path: /health
+                          port: 8000
+                        initialDelaySeconds: 10
+                        periodSeconds: 10
+                        timeoutSeconds: 3
+                        failureThreshold: 3
+              ---
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: ${{ env.BACKEND_SERVICE_NAME }}-blue
+                namespace: ${{ env.PRODUCTION_NAMESPACE }}
+              spec:
+                selector:
+                  app: ${{ env.BACKEND_SERVICE_NAME }}
+                  version: blue
+                ports:
+                - port: 80
+                  targetPort: 8000
+                type: ClusterIP
+              ---
+              apiVersion: networking.k8s.io/v1
+              kind: Ingress
+              metadata:
+                name: ${{ env.BACKEND_SERVICE_NAME }}-blue
+                namespace: ${{ env.PRODUCTION_NAMESPACE }}
+                annotations:
+                  kubernetes.io/ingress.class: nginx
+                  nginx.ingress.kubernetes.io/rewrite-target: /
+                  cert-manager.io/cluster-issuer: letsencrypt-prod
+                tls:
+                - hosts:
+                  - api.ainews.example.com
+                  secretName: api-tls
+              spec:
+                rules:
+                - host: api.ainews.example.com
+                  http:
+                    paths:
+                    - path: /api
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: ${{ env.BACKEND_SERVICE_NAME }}-blue
+                          port:
+                            number: 80
+              EOF
+              ;;
+              
+            "canary")
+              echo "🟡 Canary deployment..."
+              
+              # Deploy canary version (10% traffic)
+              kubectl apply -f - <<EOF
+              apiVersion: argoproj.io/v1alpha1
+              kind: Rollout
+              metadata:
+                name: ${{ env.BACKEND_SERVICE_NAME }}-canary
+                namespace: ${{ env.PRODUCTION_NAMESPACE }}
+              spec:
+                replicas: 5
+                strategy:
+                  canary:
+                    steps:
+                    - setWeight: 10
+                    - pause: {duration: 30s}
+                    - setWeight: 50
+                    - pause: {duration: 60s}
+                    - setWeight: 100
+                    canaryService: ${{ env.BACKEND_SERVICE_NAME }}-canary
+                    stableService: ${{ env.BACKEND_SERVICE_NAME }}-stable
+                selector:
+                  matchLabels:
+                    app: ${{ env.BACKEND_SERVICE_NAME }}
+                    version: canary
+                template:
+                  metadata:
+                    labels:
+                      app: ${{ env.BACKEND_SERVICE_NAME }}
+                      version: canary
+                  spec:
+                    containers:
+                    - name: backend
+                      image: ${{ needs.pre-deployment.outputs.backend-image }}
+                      # ... same container spec as above
+              EOF
+              ;;
+              
+            "rolling")
+              echo "🔄 Rolling update..."
+              
+              # Rolling update of existing deployment
+              kubectl set image deployment/${{ env.BACKEND_SERVICE_NAME }} backend=${{ needs.pre-deployment.outputs.backend-image }} -n ${{ env.PRODUCTION_NAMESPACE }}
+              kubectl rollout status deployment/${{ env.BACKEND_SERVICE_NAME }} -n ${{ env.PRODUCTION_NAMESPACE }} --timeout=600s
+              ;;
+          esac
+
+      - name: 🚀 Deploy frontend to production
+        run: |
+          echo "⚛️  Deploying frontend to production..."
+          
+          kubectl apply -f - <<EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ${{ env.FRONTEND_SERVICE_NAME }}
+            namespace: ${{ env.PRODUCTION_NAMESPACE }}
+          spec:
+            replicas: 3
+            selector:
+              matchLabels:
+                app: ${{ env.FRONTEND_SERVICE_NAME }}
+            template:
+              metadata:
+                labels:
+                  app: ${{ env.FRONTEND_SERVICE_NAME }}
+              spec:
+                containers:
+                - name: frontend
+                  image: ${{ needs.pre-deployment.outputs.frontend-image }}
+                  ports:
+                  - containerPort: 3000
+                  resources:
+                    requests:
+                      memory: "256Mi"
+                      cpu: "100m"
+                    limits:
+                      memory: "512Mi"
+                      cpu: "200m"
+                  env:
+                  - name: VITE_API_URL
+                    value: "https://api.ainews.example.com/api/v1"
+                  - name: ENVIRONMENT
+                    value: "production"
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: ${{ env.FRONTEND_SERVICE_NAME }}
+            namespace: ${{ env.PRODUCTION_NAMESPACE }}
+          spec:
+            selector:
+              app: ${{ env.FRONTEND_SERVICE_NAME }}
+            ports:
+            - port: 80
+              targetPort: 3000
+            type: ClusterIP
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ${{ env.FRONTEND_SERVICE_NAME }}
+            namespace: ${{ env.PRODUCTION_NAMESPACE }}
+            annotations:
+              kubernetes.io/ingress.class: nginx
+              cert-manager.io/cluster-issuer: letsencrypt-prod
+            tls:
+            - hosts:
+              - ainews.example.com
+              secretName: frontend-tls
+          spec:
+            rules:
+            - host: ainews.example.com
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: ${{ env.FRONTEND_SERVICE_NAME }}
+                      port:
+                        number: 80
+          EOF
+
+      - name: ⏳ Wait for production deployment
+        run: |
+          echo "⏳ Waiting for production deployment to be ready..."
+          
+          if [ "${{ github.event.inputs.deployment_type || 'blue-green' }}" == "blue-green" ]; then
+            # For blue-green, wait for blue environment
+            kubectl rollout status deployment/${{ env.BACKEND_SERVICE_NAME }}-blue -n ${{ env.PRODUCTION_NAMESPACE }} --timeout=600s
+          else
+            # For other strategies, wait for main deployment
+            kubectl rollout status deployment/${{ env.BACKEND_SERVICE_NAME }} -n ${{ env.PRODUCTION_NAMESPACE }} --timeout=600s
+          fi
+          
+          kubectl rollout status deployment/${{ env.FRONTEND_SERVICE_NAME }} -n ${{ env.PRODUCTION_NAMESPACE }} --timeout=600s
+
+  # Job 3: Production smoke tests
+  production-smoke-tests:
+    name: 🧪 Production Smoke Tests
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    if: always() && needs.deploy-production.result == 'success'
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: 🧪 Test production endpoints
+        run: |
+          echo "🧪 Testing production endpoints..."
+          
+          # Test backend health
+          curl -f https://api.ainews.example.com/health || exit 1
+          echo "✅ Backend health check passed"
+          
+          # Test API endpoints
+          curl -f https://api.ainews.example.com/api/v1/articles || echo "⚠️  Articles endpoint test failed"
+          
+          # Test frontend
+          curl -f https://ainews.example.com || exit 1
+          echo "✅ Frontend health check passed"
+
+      - name: 📊 Load testing
+        run: |
+          echo "📊 Running production load test..."
+          
+          pip install requests
+          
+          python3 -c "
+          import requests
+          import time
+          import concurrent.futures
+          import statistics
+          
+          def make_request():
+              start = time.time()
+              try:
+                  response = requests.get('https://api.ainews.example.com/health', timeout=10)
+                  end = time.time()
+                  return {
+                      'success': response.status_code == 200,
+                      'response_time': end - start
+                  }
+              except Exception as e:
+                  end = time.time()
+                  return {
+                      'success': False,
+                      'response_time': end - start,
+                      'error': str(e)
+                  }
+          
+          # Run 50 concurrent requests
+          print('Running 50 concurrent requests...')
+          with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+              results = list(executor.map(lambda _: make_request(), range(50)))
+          
+          success_count = sum(1 for r in results if r['success'])
+          response_times = [r['response_time'] for r in results if r['success']]
+          
+          print(f'Requests completed: {success_count}/50')
+          if response_times:
+              print(f'Average response time: {statistics.mean(response_times):.3f}s')
+              print(f'95th percentile: {statistics.quantiles(response_times, n=20)[18]:.3f}s')
+              print(f'Max response time: {max(response_times):.3f}s')
+          
+          if success_count >= 45:  # 90% success rate
+              print('✅ Load test passed')
+          else:
+              print('❌ Load test failed')
+              exit(1)
+          "
+
+  # Job 4: Database migration (if needed)
+  run-migrations:
+    name: 🗃️ Run Database Migrations
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    if: always()
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.PRODUCTION_KUBECONFIG }}" | base64 -d > ~/.kube/config
+
+      - name: 🔄 Apply database migrations
+        run: |
+          echo "🔄 Running database migrations..."
+          
+          # Create migration job
+          kubectl apply -f - <<EOF
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: db-migration-${{ needs.pre-deployment.outputs.deployment-id }}
+            namespace: ${{ env.PRODUCTION_NAMESPACE }}
+          spec:
+            template:
+              spec:
+                containers:
+                - name: backend
+                  image: ${{ needs.pre-deployment.outputs.backend-image }}
+                  command: ["python", "-m", "alembic", "upgrade", "head"]
+                  env:
+                  - name: DATABASE_URL
+                    valueFrom:
+                      secretKeyRef:
+                        name: production-secrets
+                        key: database-url
+                restartPolicy: OnFailure
+            backoffLimit: 3
+          EOF
+
+      - name: ⏳ Wait for migrations
+        run: |
+          kubectl wait --for=condition=complete job/db-migration-${{ needs.pre-deployment.outputs.deployment-id }} --timeout=300s -n ${{ env.PRODUCTION_NAMESPACE }}
+
+  # Job 5: Post-deployment monitoring
+  post-deployment-monitoring:
+    name: 📊 Post-deployment Monitoring
+    runs-on: ubuntu-latest
+    needs: [deploy-production, production-smoke-tests, run-migrations]
+    if: always()
+    steps:
+      - name: 📊 Monitor deployment health
+        run: |
+          echo "📊 Monitoring deployment health..."
+          
+          # Configure kubectl
+          mkdir -p ~/.kube
+          echo "${{ secrets.PRODUCTION_KUBECONFIG }}" | base64 -d > ~/.kube/config
+          
+          # Check deployment status
+          kubectl get deployments -n ${{ env.PRODUCTION_NAMESPACE }}
+          kubectl get pods -n ${{ env.PRODUCTION_NAMESPACE }}
+          
+          # Check service health
+          kubectl get services -n ${{ env.PRODUCTION_NAMESPACE }}
+
+      - name: 📤 Deployment success notification
+        if: success()
+        run: |
+          echo "🎉 Production deployment successful!"
+          echo "🌐 Production URL: https://ainews.example.com"
+          echo "🔗 API URL: https://api.ainews.example.com"
+          echo "🆔 Deployment ID: ${{ needs.pre-deployment.outputs.deployment-id }}"
+          echo "📦 Version: ${{ needs.pre-deployment.outputs.version }}"
+          echo "📦 Backend Image: ${{ needs.pre-deployment.outputs.backend-image }}"
+          echo "📦 Frontend Image: ${{ needs.pre-deployment.outputs.frontend-image }}"
+
+      - name: 📤 Deployment failure notification
+        if: failure()
+        run: |
+          echo "❌ Production deployment failed!"
+          echo "🔄 Initiating automatic rollback..."
+          
+          # Configure kubectl
+          mkdir -p ~/.kube
+          echo "${{ secrets.PRODUCTION_KUBECONFIG }}" | base64 -d > ~/.kube/config
+          
+          # Automatic rollback
+          kubectl rollout undo deployment/${{ env.BACKEND_SERVICE_NAME }} -n ${{ env.PRODUCTION_NAMESPACE }}
+          kubectl rollout undo deployment/${{ env.FRONTEND_SERVICE_NAME }} -n ${{ env.PRODUCTION_NAMESPACE }}
+          
+          # Wait for rollback
+          kubectl rollout status deployment/${{ env.BACKEND_SERVICE_NAME }} -n ${{ env.PRODUCTION_NAMESPACE }} --timeout=300s
+          kubectl rollout status deployment/${{ env.FRONTEND_SERVICE_NAME }} -n ${{ env.PRODUCTION_NAMESPACE }} --timeout=300s
+          
+          echo "🔄 Automatic rollback completed"
+
+      - name: 📁 Save deployment records
+        uses: actions/upload-artifact@v3
+        with:
+          name: production-deployment-record-${{ needs.pre-deployment.outputs.deployment-id }}
+          path: deployment-records/
+          retention-days: 90

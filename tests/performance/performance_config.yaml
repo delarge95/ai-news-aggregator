@@ -1,0 +1,647 @@
+# Configuración de Performance Tests para AI News Aggregator
+# Archivo principal de configuración para todos los tests de performance
+
+test_name: "AI News Aggregator Performance Tests"
+base_environment: "staging"
+version: "1.0.0"
+
+# Configuración de ambientes
+environments:
+  development:
+    description: "Ambiente de desarrollo local"
+    api_host: "localhost:8000"
+    frontend_host: "localhost:3000"
+    database:
+      host: "localhost"
+      port: 5432
+      database: "ai_news_db"
+      user: "postgres"
+      password: "password"
+    timeout: 30
+    retries: 3
+  
+  staging:
+    description: "Ambiente de staging para testing"
+    api_host: "staging-api.example.com"
+    frontend_host: "staging-frontend.example.com"
+    database:
+      host: "staging-db.example.com"
+      port: 5432
+      database: "ai_news_staging"
+      user: "staging_user"
+      password: "staging_password"
+    timeout: 45
+    retries: 2
+  
+  production:
+    description: "Ambiente de producción"
+    api_host: "api.example.com"
+    frontend_host: "frontend.example.com"
+    database:
+      host: "db.example.com"
+      port: 5432
+      database: "ai_news_prod"
+      user: "prod_user"
+      password: "prod_password"
+    timeout: 60
+    retries: 1
+
+# Configuración de thresholds críticos
+thresholds:
+  # Performance thresholds
+  response_time:
+    avg_ms: 500
+    p95_ms: 1000
+    p99_ms: 1500
+    critical_ms: 2000
+  
+  # Error and availability thresholds  
+  availability:
+    error_rate_percent: 2.0
+    critical_error_rate_percent: 5.0
+    success_rate_percent: 95.0
+    critical_success_rate_percent: 90.0
+  
+  # Throughput thresholds
+  throughput:
+    min_rps: 10
+    target_rps: 50
+    critical_rps: 100
+  
+  # Database thresholds
+  database:
+    query_time_avg_ms: 500
+    query_time_p95_ms: 1000
+    connection_pool_utilization_percent: 80
+    connection_pool_critical_percent: 90
+  
+  # Frontend thresholds (Core Web Vitals)
+  frontend:
+    lcp_ms: 2500       # Largest Contentful Paint
+    lcp_critical_ms: 4000
+    fid_ms: 100        # First Input Delay
+    fid_critical_ms: 300
+    cls_score: 0.1     # Cumulative Layout Shift
+    cls_critical_score: 0.25
+    fcp_ms: 1800       # First Contentful Paint
+    ttfb_ms: 800       # Time to First Byte
+    performance_score: 80
+    accessibility_score: 80
+  
+  # System thresholds
+  system:
+    cpu_utilization_percent: 80
+    memory_utilization_percent: 85
+    disk_utilization_percent: 90
+
+# Configuración de load tests
+load_tests:
+  enabled: true
+  tool: "locust"
+  
+  # Configuración general
+  default_config:
+    headless: true
+    spawn_rate: 2
+    run_time: "5m"
+    stop_timeout: 30
+  
+  # Tipos de usuarios y weights
+  user_types:
+    normal_user:
+      weight: 70
+      wait_time_min: 1
+      wait_time_max: 3
+      description: "Usuario típico leyendo artículos"
+    
+    admin_user:
+      weight: 5
+      wait_time_min: 5
+      wait_time_max: 10
+      description: "Usuario administrador"
+    
+    crawler_user:
+      weight: 25
+      wait_time_min: 0.5
+      wait_time_max: 1.5
+      description: "Bot/crawler escaneando contenido"
+  
+  # Escenarios de carga
+  scenarios:
+    normal_load:
+      name: "Normal Load Test"
+      description: "Simula tráfico normal durante horas de trabajo"
+      users: 20
+      spawn_rate: 2
+      run_time: "30m"
+      target_rps: 20
+      
+    high_load:
+      name: "High Load Test"
+      description: "Simula pico de tráfico durante eventos importantes"
+      users: 100
+      spawn_rate: 5
+      run_time: "60m"
+      target_rps: 100
+      
+    endurance:
+      name: "Endurance Test"
+      description: "Test de resistencia prolongada"
+      users: 50
+      spawn_rate: 1
+      run_time: "4h"
+      target_rps: 30
+      
+    spike:
+      name: "Spike Test"
+      description: "Test de respuesta a picos súbitos de tráfico"
+      users: 200
+      spawn_rate: 10
+      run_time: "15m"
+      target_rps: 10
+
+# Configuración de performance tests
+performance_tests:
+  enabled: true
+  concurrent_users: 10
+  requests_per_user: 50
+  timeout: 30
+  
+  # Endpoints a testear
+  endpoints:
+    critical:
+      - "/api/v1/articles"
+      - "/api/v1/search"
+      - "/api/v1/articles/{id}"
+      - "/api/v1/users/{id}/news"
+      - "/health"
+    
+    admin:
+      - "/api/v1/admin/metrics"
+      - "/api/v1/admin/articles/stats"
+      - "/api/v1/admin/users/stats"
+    
+    user:
+      - "/api/v1/users/{id}/preferences"
+      - "/api/v1/users/{id}/analytics"
+
+# Configuración de stress tests
+stress_tests:
+  enabled: true
+  
+  # Tipos de stress tests
+  test_types:
+    rate_limiting:
+      description: "Test de rate limiting"
+      requests_per_second: 20
+      burst_size: 40
+      duration_seconds: 90
+      concurrent_users: 10
+    
+    extreme_load:
+      description: "Carga extrema"
+      requests_per_second: 100
+      burst_size: 200
+      duration_seconds: 60
+      concurrent_users: 50
+    
+    sustained_load:
+      description: "Carga sostenida"
+      requests_per_second: 50
+      burst_size: 100
+      duration_seconds: 120
+      concurrent_users: 20
+
+# Configuración de database tests
+database_tests:
+  enabled: true
+  concurrent_connections: 10
+  queries_per_connection: 20
+  query_timeout: 30
+  
+  # Queries de test
+  test_queries:
+    articles_pagination:
+      name: "Get Articles Pagination"
+      query: "SELECT id, title, content, published_at FROM articles ORDER BY created_at DESC LIMIT $1 OFFSET $2"
+      params: [20, 0]
+    
+    article_search:
+      name: "Search Articles"
+      query: "SELECT id, title, content FROM articles WHERE title ILIKE $1 OR content ILIKE $1 LIMIT $2"
+      params: ["%artificial intelligence%", 20]
+    
+    user_analytics:
+      name: "Get User Analytics"
+      query: "SELECT COUNT(*) as reads, AVG(session_duration) as avg_session FROM user_analytics WHERE user_id = $1"
+      params: [1]
+    
+    system_metrics:
+      name: "Get System Metrics"
+      query: "SELECT COUNT(*) as articles, AVG(EXTRACT(EPOCH FROM (NOW() - published_at))/3600) as avg_age_hours FROM articles"
+      params: []
+
+# Configuración de frontend tests
+frontend_tests:
+  enabled: true
+  concurrent_users: 3
+  iterations_per_page: 2
+  mobile_emulation: false
+  capture_screenshots: false
+  
+  # Páginas a testear
+  pages:
+    homepage:
+      url: "/"
+      name: "Homepage"
+      description: "Página principal"
+    
+    articles:
+      url: "/articles"
+      name: "Articles Page"
+      description: "Lista de artículos"
+    
+    search:
+      url: "/search"
+      name: "Search Page"
+      description: "Página de búsqueda"
+    
+    dashboard:
+      url: "/dashboard"
+      name: "Dashboard"
+      description: "Dashboard de usuario"
+    
+    article_detail:
+      url: "/articles/1"
+      name: "Article Detail"
+      description: "Detalle de artículo específico"
+  
+  # User journeys
+  user_journeys:
+    reading_journey:
+      name: "User Reading Journey"
+      description: "Journey típico de lectura"
+      pages:
+        - "/"
+        - "/articles"
+        - "/articles/1"
+        - "/search"
+    
+    admin_journey:
+      name: "Admin Dashboard Journey"
+      description: "Journey de administrador"
+      pages:
+        - "/admin"
+        - "/admin/articles"
+        - "/admin/analytics"
+        - "/admin/users"
+
+# Configuración de alertas
+alerts:
+  enabled: true
+  
+  # Canales de notificación
+  channels:
+    email:
+      enabled: true
+      smtp_server: "smtp.example.com"
+      smtp_port: 587
+      username: "alerts@example.com"
+      password: "alerts_password"
+      recipients:
+        - "admin@example.com"
+        - "devops@example.com"
+        - "engineering@example.com"
+    
+    slack:
+      enabled: false
+      webhook_url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+      channel: "#alerts"
+      username: "PerformanceBot"
+    
+    webhook:
+      enabled: false
+      url: "https://alerts.example.com/webhook"
+      headers:
+        Authorization: "Bearer YOUR_API_TOKEN"
+  
+  # Configuración de thresholds de alerta
+  thresholds:
+    # Performance alerts
+    response_time_warning: 800
+    response_time_critical: 1200
+    
+    # Availability alerts
+    error_rate_warning: 2.0
+    error_rate_critical: 5.0
+    
+    # Database alerts
+    db_performance_warning: 70
+    db_performance_critical: 50
+    
+    # Frontend alerts
+    frontend_performance_warning: 70
+    frontend_performance_critical: 50
+    
+    # System alerts
+    cpu_utilization_warning: 80
+    cpu_utilization_critical: 90
+    memory_utilization_warning: 85
+    memory_utilization_critical: 95
+  
+  # Cooldown para evitar spam
+  cooldown_minutes: 15
+  
+  # Notificaciones escaladas
+  escalation:
+    enabled: true
+    levels:
+      - level: 1
+        delay_minutes: 0
+        recipients: ["devops@example.com"]
+      
+      - level: 2
+        delay_minutes: 30
+        recipients: ["engineering@example.com"]
+      
+      - level: 3
+        delay_minutes: 60
+        recipients: ["management@example.com"]
+
+# Configuración de reportes
+reporting:
+  # Formatos de salida
+  output_formats:
+    - json
+    - html
+    - csv
+  
+  # Configuración de almacenamiento
+  storage:
+    base_path: "./reports"
+    retention_days: 30
+    auto_archive: true
+    compress_old_reports: true
+  
+  # Configuración de contenido
+  include:
+    summary_report: true
+    detailed_metrics: true
+    charts_and_graphs: true
+    raw_data: true
+    recommendations: true
+    trends_analysis: false  # Requiere historial
+  
+  # Templates de reporte
+  templates:
+    executive_summary: true
+    technical_report: true
+    developer_report: false
+  
+  # Integraciones
+  integrations:
+    slack:
+      upload_reports: false
+      channel: "#performance-reports"
+    
+    email:
+      attach_reports: true
+      summary_only: false
+    
+    webhook:
+      send_results: false
+      endpoint: "https://hooks.example.com/performance"
+
+# Configuración de programación
+scheduling:
+  enabled: false  # Activar si se quiere ejecución automática
+  
+  # Tests programados con cron expressions
+  scheduled_tests:
+    - name: "Daily Normal Load Test"
+      cron: "0 9 * * 1-5"  # Lunes a viernes 9am
+      environment: "staging"
+      scenario: "normal_load"
+      notify_on_failure: true
+    
+    - name: "Weekly High Load Test"
+      cron: "0 14 * * 3"   # Miércoles 2pm
+      environment: "staging"
+      scenario: "high_load"
+      notify_on_failure: true
+    
+    - name: "Weeklyend Endurance Test"
+      cron: "0 2 * * 6"    # Sábado 2am
+      environment: "staging"
+      scenario: "endurance"
+      notify_on_failure: false
+  
+  # Configuración de ejecución
+  execution:
+    max_parallel_tests: 2
+    test_timeout_hours: 8
+    cleanup_after_execution: true
+    notify_on_completion: true
+
+# Configuración de integración CI/CD
+ci_cd:
+  # GitHub Actions
+  github_actions:
+    enabled: false
+    workflow_file: ".github/workflows/performance-tests.yml"
+    artifacts_path: "reports"
+    artifact_retention_days: 30
+  
+  # Jenkins
+  jenkins:
+    enabled: false
+    job_name: "performance-tests"
+    workspace_path: "/workspace"
+  
+  # GitLab CI
+  gitlab_ci:
+    enabled: false
+    artifacts_path: "reports"
+    artifacts_expire_in: "30 days"
+
+# Configuración de monitoreo
+monitoring:
+  # Métricas de sistema
+  system_metrics:
+    enabled: true
+    collection_interval_seconds: 10
+    
+    metrics:
+      - cpu_usage
+      - memory_usage
+      - disk_usage
+      - network_io
+      - process_count
+  
+  # Métricas de aplicación
+  application_metrics:
+    enabled: true
+    collection_interval_seconds: 5
+    
+    metrics:
+      - request_count
+      - response_time
+      - error_count
+      - active_connections
+      - queue_depth
+  
+  # Alertas de monitoreo
+  monitoring_alerts:
+    enabled: true
+    escalation_enabled: true
+    alert_thresholds:
+      cpu_usage_percent: 85
+      memory_usage_percent: 90
+      disk_usage_percent: 95
+
+# Configuración de datos de test
+test_data:
+  # Datos sintéticos
+  synthetic_data:
+    enabled: true
+    user_count: 1000
+    article_count: 5000
+    category_count: 10
+  
+  # Limpieza de datos
+  cleanup:
+    enabled: true
+    after_test_execution: true
+    retain_test_results: true
+  
+  # Datos realistas
+  realistic_data:
+    enabled: false
+    data_source: "production_anonymized"
+    refresh_interval_hours: 24
+
+# Configuración de seguridad
+security:
+  # Autenticación
+  authentication:
+    test_users:
+      - email: "perf_test_1@example.com"
+        password: "test_password_1"
+        role: "user"
+      - email: "perf_test_admin@example.com"
+        password: "admin_password_1"
+        role: "admin"
+    
+    token_expiry_hours: 2
+  
+  # Rate limiting
+  rate_limiting:
+    test_api_key: "test_api_key_123"
+    rate_limit_per_minute: 1000
+  
+  # Anonimización
+  anonymization:
+    enabled: true
+    sensitive_fields:
+      - email
+      - ip_address
+      - user_agent
+    hash_algorithm: "sha256"
+
+# Configuración de desarrollo
+development:
+  # Debug mode
+  debug: false
+  verbose_logging: false
+  
+  # Pruebas rápidas
+  quick_tests:
+    enabled: true
+    reduced_duration: true
+    users_multiplier: 0.1
+  
+  # Datos de desarrollo
+  dev_data:
+    use_mock_data: true
+    database_reset: true
+    seed_data: true
+
+# Configuración de producción
+production:
+  # Modo seguro
+  safe_mode: true
+  readonly_tests: true
+  limited_duration: true
+  
+  # Límites estrictos
+  strict_thresholds: true
+  alert_on_warning: true
+  fail_on_critical: true
+  
+  # Cumplimiento
+  compliance:
+    data_retention_compliant: true
+    audit_trail: true
+    gdpr_compliant: true
+
+# Configuración experimental
+experimental:
+  # Nuevas features
+  new_features:
+    ai_performance_prediction: false
+    automated_optimization: false
+    predictive_scaling: false
+  
+  # Herramientas experimentales
+  tools:
+    chaos_engineering: false
+    distributed_testing: false
+    cloud_based_testing: false
+
+# Configuración de plugins
+plugins:
+  # Plugins de terceros
+  third_party:
+    - name: "performance-plugin-1"
+      enabled: false
+      config:
+        api_key: "plugin_api_key"
+  
+  # Plugins personalizados
+  custom:
+    - name: "custom-reporter"
+      enabled: false
+      config:
+        output_format: "xml"
+
+# Configuración de localización
+localization:
+  # Idioma de reportes
+  language: "es"
+  
+  # Formato de fechas
+  date_format: "%Y-%m-%d %H:%M:%S"
+  
+  # Zona horaria
+  timezone: "America/Mexico_City"
+  
+  # Formato de números
+  number_format:
+    decimal_separator: "."
+    thousand_separator: ","
+
+# Notas de configuración
+notes: |
+  Este archivo contiene la configuración completa para los tests de performance.
+  
+  Para personalizar para tu ambiente:
+  1. Copiar este archivo como config_local.yaml
+  2. Modificar los valores según tu entorno
+  3. Usar --config config_local.yaml al ejecutar tests
+  
+  Ambientes soportados:
+  - development: Tests locales
+  - staging: Tests pre-producción
+  - production: Tests de producción (solo si es seguro)
+  
+  Para más información, consultar README.md

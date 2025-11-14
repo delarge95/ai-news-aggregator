@@ -1,0 +1,88 @@
+#!/bin/bash
+# SSL Certificate Health Check Script
+
+set -e
+
+DOMAIN="{{ domain_name }}"
+SSL_PATH="{{ ssl_cert_path | default('/etc/ssl/ai-news/fullchain.pem') }}"
+WEBHOOK_URL="{{ ssl_webhook_url | default('') }}"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Function to log messages
+log() {
+    echo -e "$(date '+%Y-%m-%d %H:%M:%S') - $1"
+}
+
+# Function to send webhook notification
+notify() {
+    if [ -n "$WEBHOOK_URL" ]; then
+        curl -X POST -H 'Content-type: application/json' \
+             --data "{\"text\":\"SSL Certificate Alert: $1\"}" \
+             "$WEBHOOK_URL" 2>/dev/null || true
+    fi
+}
+
+# Check if certificate file exists
+if [ ! -f "$SSL_PATH" ]; then
+    log "${RED}ERROR: SSL certificate not found at $SSL_PATH${NC}"
+    notify "SSL certificate not found"
+    exit 1
+fi
+
+# Get certificate expiration date
+CERT_EXPIRY=$(openssl x509 -enddate -noout -in "$SSL_PATH" | cut -d= -f2)
+CERT_EXPIRY_EPOCH=$(date -d "$CERT_EXPIRY" +%s)
+CURRENT_EPOCH=$(date +%s)
+
+# Calculate days until expiration
+DAYS_TO_EXPIRY=$(( (CERT_EXPIRY_EPOCH - CURRENT_EPOCH) / 86400 ))
+
+log "${GREEN}Certificate Information:${NC}"
+log "Domain: $DOMAIN"
+log "Path: $SSL_PATH"
+log "Expires: $CERT_EXPIRY"
+log "Days until expiry: $DAYS_TO_EXPIRY"
+
+# Check certificate expiration
+if [ $DAYS_TO_EXPIRY -lt 0 ]; then
+    log "${RED}CRITICAL: Certificate has EXPIRED!${NC}"
+    notify "Certificate has EXPIRED for $DOMAIN"
+    exit 2
+elif [ $DAYS_TO_EXPIRY -lt 7 ]; then
+    log "${RED}WARNING: Certificate expires in $DAYS_TO_EXPIRY days${NC}"
+    notify "Certificate expires in $DAYS_TO_EXPIRY days for $DOMAIN"
+    exit 1
+elif [ $DAYS_TO_EXPIRY -lt 30 ]; then
+    log "${YELLOW}NOTICE: Certificate expires in $DAYS_TO_EXPIRY days${NC}"
+    notify "Certificate expires in $DAYS_TO_EXPIRY days for $DOMAIN"
+else
+    log "${GREEN}Certificate is valid for $DAYS_TO_EXPIRY more days${NC}"
+fi
+
+# Test SSL connection
+if command -v openssl >/dev/null 2>&1; then
+    if echo | openssl s_client -connect localhost:443 -servername "$DOMAIN" 2>/dev/null | openssl x509 -noout -dates 2>/dev/null; then
+        log "${GREEN}SSL connection test successful${NC}"
+    else
+        log "${RED}WARNING: SSL connection test failed${NC}"
+        notify "SSL connection test failed for $DOMAIN"
+        exit 1
+    fi
+fi
+
+# Test renewal capability
+if certbot certificates >/dev/null 2>&1; then
+    log "${GREEN}Certbot is functioning correctly${NC}"
+else
+    log "${RED}ERROR: Certbot is not functioning correctly${NC}"
+    notify "Certbot is not functioning correctly"
+    exit 1
+fi
+
+log "${GREEN}SSL health check completed successfully${NC}"
+exit 0

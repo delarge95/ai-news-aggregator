@@ -1,0 +1,247 @@
+# Alertmanager Configuration
+# Description: Routes and manages alerts for the AI News Aggregator
+
+global:
+  # Global SMTP server configuration
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'alerts@ai-news-aggregator.com'
+  smtp_auth_username: 'alerts@ai-news-aggregator.com'
+  smtp_auth_password: '${SMTP_PASSWORD}'
+  
+  # Slack webhook (optional)
+  slack_api_url: '${SLACK_WEBHOOK_URL}'
+
+# Templates for notifications
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Route all alerts to the default receiver by default
+route:
+  group_by: ['alertname', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'default-receiver'
+  routes:
+    # Critical alerts - immediate notification
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 5s
+      repeat_interval: 15m
+    
+    # Security alerts
+    - match:
+        service: security
+      receiver: 'security-alerts'
+      group_wait: 30s
+      repeat_interval: 30m
+    
+    # Database alerts
+    - match:
+        service: database
+      receiver: 'database-alerts'
+      group_wait: 1m
+      repeat_interval: 30m
+    
+    # Monitoring system alerts
+    - match:
+        service: monitoring
+      receiver: 'monitoring-alerts'
+      group_wait: 30s
+      repeat_interval: 1h
+    
+    # Backup alerts
+    - match:
+        service: backup
+      receiver: 'backup-alerts'
+      group_wait: 1m
+      repeat_interval: 2h
+
+# Inhibit rules - suppress lower priority alerts when higher priority alerts fire
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']
+  
+  - source_match:
+      service: 'database'
+    target_match:
+      service: 'application'
+    equal: ['instance']
+
+# Receivers configuration
+receivers:
+  - name: 'default-receiver'
+    email_configs:
+      - to: 'admin@ai-news-aggregator.com'
+        subject: '[AI News] Alert: {{ .GroupLabels.alertname }}'
+        body: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Severity: {{ .Labels.severity }}
+          Instance: {{ .Labels.instance }}
+          Time: {{ .StartsAt }}
+          {{ end }}
+
+  - name: 'critical-alerts'
+    email_configs:
+      - to: 'admin@ai-news-aggregator.com,oncall@ai-news-aggregator.com'
+        subject: '[CRITICAL] {{ .GroupLabels.alertname }}'
+        body: |
+          🚨 CRITICAL ALERT 🚨
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Severity: {{ .Labels.severity }}
+          Service: {{ .Labels.service }}
+          Instance: {{ .Labels.instance }}
+          Time: {{ .StartsAt }}
+          Runbook: {{ .Annotations.runbook_url }}
+          {{ end }}
+          
+          Please investigate immediately!
+        
+    # Send to Slack for critical alerts
+    slack_configs:
+      - channel: '#alerts-critical'
+        title: '🚨 Critical Alert'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Service:* {{ .Labels.service }}
+          *Instance:* {{ .Labels.instance }}
+          *Runbook:* {{ .Annotations.runbook_url }}
+          {{ end }}
+
+  - name: 'security-alerts'
+    email_configs:
+      - to: 'security@ai-news-aggregator.com'
+        subject: '[SECURITY] {{ .GroupLabels.alertname }}'
+        body: |
+          🔒 SECURITY ALERT 🔒
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Source IP: {{ .Labels.source_ip }}
+          Time: {{ .StartsAt }}
+          {{ end }}
+          
+          This may indicate a security incident!
+
+  - name: 'database-alerts'
+    email_configs:
+      - to: 'db-team@ai-news-aggregator.com,admin@ai-news-aggregator.com'
+        subject: '[DATABASE] {{ .GroupLabels.alertname }}'
+        body: |
+          🗄️ DATABASE ALERT 🗄️
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Database: {{ .Labels.database }}
+          Time: {{ .StartsAt }}
+          {{ end }}
+
+  - name: 'monitoring-alerts'
+    email_configs:
+      - to: 'devops@ai-news-aggregator.com'
+        subject: '[MONITORING] {{ .GroupLabels.alertname }}'
+        body: |
+          📊 MONITORING ALERT 📊
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Monitoring System: {{ .Labels.job }}
+          Time: {{ .StartsAt }}
+          {{ end }}
+
+  - name: 'backup-alerts'
+    email_configs:
+      - to: 'devops@ai-news-aggregator.com,admin@ai-news-aggregator.com'
+        subject: '[BACKUP] {{ .GroupLabels.alertname }}'
+        body: |
+          💾 BACKUP ALERT 💾
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Backup System: {{ .Labels.system }}
+          Time: {{ .StartsAt }}
+          {{ end }}
+          
+          Verify backup integrity and restore procedures!
+
+# Webhook receiver for external systems
+  - name: 'webhook-alerts'
+    webhook_configs:
+      - url: 'http://localhost:5001/alerts'
+        send_resolved: true
+        title: '{{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Status: {{ .Status }}
+          Labels: {{ .Labels }}
+          {{ end }}
+
+# PagerDuty integration (if applicable)
+  - name: 'pagerduty-critical'
+    pagerduty_configs:
+      - routing_key: '${PAGERDUTY_ROUTING_KEY}'
+        description: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        severity: 'critical'
+
+# VictorOps integration (if applicable)
+  - name: 'victorops-critical'
+    victorops_configs:
+      - api_key: '${VICTOROPS_API_KEY}'
+        routing_key: 'ai-news-critical'
+        message_type: 'CRITICAL'
+        summary: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        description: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+
+# Notification muting rules (silences)
+mute_time_intervals:
+  - name: 'maintenance'
+    time_intervals:
+      - times:
+          - start_time: '02:00'
+            end_time: '04:00'
+        weekdays: ['saturday', 'sunday']
+        months: ['january', 'march', 'may', 'july', 'september', 'november']
+
+  - name: 'off_hours'
+    time_intervals:
+      - times:
+          - start_time: '18:00'
+            end_time: '08:00'
+        weekdays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
+
+# Apply muting rules to specific receivers
+route:
+  routes:
+    - match:
+        service: database
+      mute_time_intervals:
+        - maintenance
+    
+    - match_re:
+        severity: 'warning|info'
+      mute_time_intervals:
+        - off_hours
+
+# High availability configuration
+# For production, run multiple alertmanager instances and use a load balancer
+# high_availability:
+#   cluster:
+#     listen-address: "0.0.0.0:9094"
+#     peer: "alertmanager-1:9094"
+#     peer-2: "alertmanager-2:9094"

@@ -1,0 +1,340 @@
+# Infrastructure .gitignore
+# AI News Aggregator Infrastructure
+
+# Terraform files
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+!terraform.tfvars.example
+
+# Local .terraform directories
+**/.terraform/*
+
+# .tfstate files
+*.tfstate
+*.tfstate.*
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Exclude override files as they are usually used to override resources locally
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Include tfplan files to ignore the resource changes
+*.tfplan
+*.tfplan.*
+
+# Ignore credential files
+*credentials*
+*secrets*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Ansible files
+**/.vault-pass.txt
+**/secrets.yml
+**/vault.yml
+**/*.key
+**/.private_key
+**/.ssh/
+
+# Log files
+*.log
+*.log.*
+/tmp/
+/var/log/
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+*~
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# Environment-specific files
+.env
+.env.local
+.env.*.local
+
+# SSL certificates and keys
+/etc/ssl/private/
+/etc/letsencrypt/live/
+*.crt
+*.csr
+*.key
+*.pem
+*.p7s
+*.der
+
+# SSL backup files
+*ssl-backup*
+*cert-backup*
+*acme*
+
+# Docker files
+.dockerignore
+docker-compose.override.yml
+
+# Monitoring data
+/prometheus/data/
+/grafana/data/
+/alertmanager/data/
+
+# Database backups
+*.sql
+*.dump
+*.db
+*.sqlite
+*.sqlite3
+
+# DigitalOcean CLI cache
+~/.config/doctl/cache/
+
+# SSH keys
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*.pub
+authorized_keys
+known_hosts
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+.classpath
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Package files
+*.deb
+*.rpm
+*.dmg
+*.pkg
+*.msi
+
+# Archive files
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# Test files
+*.test.js
+*.test.ts
+*.test.py
+test-*
+*test*
+spec/
+tests/
+
+# Documentation build files
+docs/_build/
+site/
+
+# Cache directories
+.cache/
+.npm/
+.node-gyp/
+.npm/
+.nuget/
+.nuget/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+
+# Build artifacts
+dist/
+build/
+out/
+target/
+
+# Coverage reports
+coverage/
+*.lcov
+.nyc_output/
+
+# Terraform outputs
+terraform-outputs.json
+terraform-*.json
+
+# Ansible logs
+/ansible/logs/
+*.log
+
+# Monitoring logs
+/monitoring/logs/
+/monitoring/data/
+
+# Security scans
+security-scan-*
+audit-results-*
+
+# Performance test results
+perf-results-*
+benchmark-*
+
+# Deployment scripts results
+deploy-*.log
+setup-*.log
+
+# Certificate management
+ssl-management.log
+ssl-health-check.log
+
+# DNS management
+dns-*.log
+dns-report-*
+
+# Backup logs
+backup-*.log
+backup-report-*
+
+# Terraform workspace files
+.terraform.tfstate.backup
+
+# Terraform plan files
+*.tfplan
+*.tfplan.*
+
+# Ansible inventory overrides
+inventory/group_vars/all/secrets.yml
+inventory/host_vars/*/secrets.yml
+
+# Custom environment files
+.env.development
+.env.staging
+.env.production
+.env.*.local
+
+# Editor backup files
+*~
+.#*
+#*#
+
+# Shell script temp files
+*.sh.o
+*.sh.c
+
+# System service files
+*.service
+*.socket
+*.target
+
+# Nginx configuration
+/etc/nginx/ssl/
+/etc/nginx/conf.d/
+sites-enabled/
+
+# Fail2ban
+/var/log/fail2ban/
+
+# Systemd service files
+/etc/systemd/system/
+
+# Cron files
+/var/spool/cron/crontabs/
+
+# Monitoring scripts
+*monitor*.sh
+*check*.sh
+*health*.sh
+
+# Debug files
+debug-*
+*.debug
+
+# Temporary deployment files
+deployment-*
+rollback-*
+
+# Config dumps
+config-dump-*
+config-backup-*
+
+# SSL test files
+ssl-test-*
+cert-test-*
+
+# DNS test files
+dns-test-*
+
+# Network test files
+network-test-*
+
+# Performance monitoring
+perf-*
+monitor-*
+
+# Security testing
+pentest-*
+security-test-*
+
+# Load testing
+loadtest-*
+stress-test-*
+
+# Kubernetes (if used)
+*.yaml.bak
+*.yml.bak
+
+# Custom ignore patterns
+**/node_modules/
+**/vendor/
+**/.bower/
+**/.composer/
+
+# Docker volumes
+docker-data/
+volumes/
+
+# Custom tool configurations
+tool-*
+config-*

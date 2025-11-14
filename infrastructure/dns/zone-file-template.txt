@@ -1,0 +1,134 @@
+# DNS Configuration for AI News Aggregator
+# Description: DNS records and zone configuration
+
+# Zone file template for ai-news-aggregator.com
+# Replace ###.###.###.### with actual IP addresses
+
+$TTL 300
+@       IN      SOA     ns1.digitalocean.com.      admin.ai-news-aggregator.com. (
+                        2024010101              ; Serial
+                        3600                    ; Refresh
+                        1800                    ; Retry
+                        604800                  ; Expire
+                        300                     ; Minimum TTL
+                        )
+
+; Name servers
+@       IN      NS      ns1.digitalocean.com.
+@       IN      NS      ns2.digitalocean.com.
+@       IN      NS      ns3.digitalocean.com.
+
+; MX records
+@       IN      MX      10      mail.ai-news-aggregator.com.
+
+; A records - Load Balancer
+@       IN      A       ###.###.###.###           ; Main domain (Load Balancer IP)
+www     IN      A       ###.###.###.###           ; www subdomain (Load Balancer IP)
+
+; A records - Web servers (direct access if needed)
+web-01  IN      A       ###.###.###.###           ; Web server 1 IP
+web-02  IN      A       ###.###.###.###           ; Web server 2 IP
+web-03  IN      A       ###.###.###.###           ; Web server 3 IP
+
+; A records - Worker servers
+worker-01       IN      A       ###.###.###.###   ; Worker server 1 IP
+worker-02       IN      A       ###.###.###.###   ; Worker server 2 IP
+
+; A records - Monitoring
+monitoring      IN      A       ###.###.###.###   ; Monitoring server IP
+
+; CNAME records
+api     IN      CNAME   www.ai-news-aggregator.com.
+admin   IN      CNAME   www.ai-news-aggregator.com.
+blog    IN      CNAME   www.ai-news-aggregator.com.
+status  IN      CNAME   www.ai-news-aggregator.com.
+
+; Monitoring CNAMEs
+prometheus      IN      CNAME   monitoring.ai-news-aggregator.com.
+grafana IN      CNAME   monitoring.ai-news-aggregator.com.
+alertmanager    IN      CNAME   monitoring.ai-news-aggregator.com.
+traefik IN      CNAME   monitoring.ai-news-aggregator.com.
+
+; Mail records (if using custom mail server)
+mail    IN      A       ###.###.###.###           ; Mail server IP
+smtp    IN      CNAME   mail.ai-news-aggregator.com.
+imap    IN      CNAME   mail.ai-news-aggregator.com.
+pop3    IN      CNAME   mail.ai-news-aggregator.com.
+
+; TXT records
+@       IN      TXT     "v=spf1 mx -all"         ; SPF record
+@       IN      TXT     "google-site-verification=YOUR_GOOGLE_VERIFICATION_TOKEN"
+_acme-challenge.ai-news-aggregator.com.    IN      TXT     "YOUR_LETSENCRYPT_CHALLENGE_TOKEN"
+
+; CAA records
+@       IN      CAA     0       issue    "letsencrypt.org"
+@       IN      CAA     0       issuewild "letsencrypt.org"
+@       IN      CAA     0       iodef    "mailto:admin@ai-news-aggregator.com"
+
+; NAPTR records (for SIP/VoIP if needed)
+@       IN      NAPTR   10      50        "s"    "SIP+D2U"    ""    _sip._udp.ai-news-aggregator.com.
+
+; SRV records (for various services)
+_sip._tcp.ai-news-aggregator.com.  IN      SRV     10      5       5060    sip.ai-news-aggregator.com.
+_xmpp-client._tcp.ai-news-aggregator.com.  IN      SRV     5       5222    xmpp.ai-news-aggregator.com.
+_xmpp-server._tcp.ai-news-aggregator.com.  IN      SRV     5       5269    xmpp.ai-news-aggregator.com.
+
+; CAA record for third-party services
+@       IN      CAA     0       issue    "pki.goog"
+@       IN      CAA     0       issue    "comodoca.com"
+@       IN      CAA     0       issue    "digicert.com"
+
+; Custom service endpoints
+webhook.ai-news-aggregator.com.   IN      A       ###.###.###.###
+static.ai-news-aggregator.com.    IN      A       ###.###.###.###
+api-v1.ai-news-aggregator.com.    IN      CNAME   api.ai-news-aggregator.com.
+api-v2.ai-news-aggregator.com.    IN      CNAME   api.ai-news-aggregator.com.
+
+; Development/Staging subdomains
+dev.ai-news-aggregator.com.       IN      A       ###.###.###.###
+staging.ai-news-aggregator.com.   IN      A       ###.###.###.###
+test.ai-news-aggregator.com.      IN      A       ###.###.###.###
+
+; Health check endpoints
+health.ai-news-aggregator.com.    IN      CNAME   www.ai-news-aggregator.com.
+status.ai-news-aggregator.com.    IN      CNAME   www.ai-news-aggregator.com.
+
+; CDN/Static content subdomains
+cdn.ai-news-aggregator.com.       IN      CNAME   static.ai-news-aggregator.com.
+assets.ai-news-aggregator.com.    IN      CNAME   static.ai-news-aggregator.com.
+
+; Backup/Archive subdomains
+backup.ai-news-aggregator.com.    IN      A       ###.###.###.###
+archive.ai-news-aggregator.com.   IN      A       ###.###.###.###
+
+; Monitoring and observability
+metrics.ai-news-aggregator.com.   IN      CNAME   monitoring.ai-news-aggregator.com.
+logs.ai-news-aggregator.com.      IN      CNAME   monitoring.ai-news-aggregator.com.
+traces.ai-news-aggregator.com.    IN      CNAME   monitoring.ai-news-aggregator.com.
+
+; Security subdomains
+security.ai-news-aggregator.com.  IN      A       ###.###.###.###
+vpn.ai-news-aggregator.com.       IN      A       ###.###.###.###
+
+; Documentation subdomains
+docs.ai-news-aggregator.com.      IN      CNAME   www.ai-news-aggregator.com.
+wiki.ai-news-aggregator.com.      IN      CNAME   www.ai-news-aggregator.com.
+api-docs.ai-news-aggregator.com.  IN      CNAME   api.ai-news-aggregator.com.
+
+; Community/support subdomains
+forum.ai-news-aggregator.com.     IN      A       ###.###.###.###
+community.ai-news-aggregator.com. IN      A       ###.###.###.###
+support.ai-news-aggregator.com.   IN      A       ###.###.###.###
+
+; Mobile app subdomains (if needed)
+m.ai-news-aggregator.com.         IN      CNAME   www.ai-news-aggregator.com.
+app.ai-news-aggregator.com.       IN      CNAME   www.ai-news-aggregator.com.
+
+; Third-party integration subdomains
+webhook.ai-news-aggregator.com.   IN      A       ###.###.###.###
+callback.ai-news-aggregator.com.  IN      A       ###.###.###.###
+oauth.ai-news-aggregator.com.     IN      A       ###.###.###.###
+
+; Search engine optimization
+www2.ai-news-aggregator.com.      IN      CNAME   www.ai-news-aggregator.com.
+m.ainws.ai-news-aggregator.com.   IN      CNAME   m.ai-news-aggregator.com.

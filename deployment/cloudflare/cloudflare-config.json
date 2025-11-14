@@ -1,0 +1,236 @@
+{
+  "zones": [
+    {
+      "name": "ainews.production.ai",
+      "type": "full",
+      "ssl_mode": "full_strict",
+      "cache_level": "aggressive",
+      "minify": {
+        "css": true,
+        "js": true,
+        "html": true
+      },
+      "brotli": true,
+      "http2": true,
+      "http3": true,
+      "ipv6": true,
+      "mirage": true,
+      "polish": "lossy",
+      "prefetch_preload": true,
+      "rock": true,
+      "websockets": true,
+      "security_level": "medium",
+      "challenge_ttl": 1800,
+      "privacy_pass": "enabled",
+      "browser_check": "enabled",
+      "hotlink_protection": "enabled",
+      "hotlink_protection_targets": ["*.pdf", "*.zip", "*.mp4", "*.mov"],
+      "rules": {
+        "caching": [
+          {
+            "targets": "file_extension",
+            "operator": "equals",
+            "value": "css",
+            "settings": {
+              "cache_level": "cache_everything",
+              "edge_cache_ttl": 604800,
+              "browser_ttl": 86400,
+              "cache_control": "public, max-age=604800"
+            }
+          },
+          {
+            "targets": "file_extension",
+            "operator": "equals",
+            "value": "js",
+            "settings": {
+              "cache_level": "cache_everything",
+              "edge_cache_ttl": 604800,
+              "browser_ttl": 86400,
+              "cache_control": "public, max-age=604800"
+            }
+          },
+          {
+            "targets": "file_extension",
+            "operator": "equals",
+            "value": "png",
+            "settings": {
+              "cache_level": "cache_everything",
+              "edge_cache_ttl": 2592000,
+              "browser_ttl": 2592000,
+              "cache_control": "public, max-age=2592000"
+            }
+          },
+          {
+            "targets": "file_extension",
+            "operator": "equals",
+            "value": "jpg",
+            "settings": {
+              "cache_level": "cache_everything",
+              "edge_cache_ttl": 2592000,
+              "browser_ttl": 2592000,
+              "cache_control": "public, max-age=2592000"
+            }
+          },
+          {
+            "targets": "file_extension",
+            "operator": "equals",
+            "value": "jpeg",
+            "settings": {
+              "cache_level": "cache_everything",
+              "edge_cache_ttl": 2592000,
+              "browser_ttl": 2592000,
+              "cache_control": "public, max-age=2592000"
+            }
+          },
+          {
+            "targets": "url",
+            "operator": "matches_regex",
+            "value": "/api/.*",
+            "settings": {
+              "cache_level": "cache_everything",
+              "edge_cache_ttl": 3600,
+              "browser_ttl": 1800,
+              "cache_control": "public, max-age=3600"
+            }
+          }
+        ],
+        "security": [
+          {
+            "targets": "url",
+            "operator": "matches_regex",
+            "value": "/api/.*",
+            "settings": {
+              "security_level": "medium",
+              "challenge_ttl": 1800,
+              "browser_check": "enabled"
+            }
+          },
+          {
+            "targets": "url",
+            "operator": "matches_regex",
+            "value": "/login.*|auth.*|password.*",
+            "settings": {
+              "security_level": "high",
+              "challenge_ttl": 1800,
+              "browser_check": "enabled",
+              "challenge_passage": "enabled"
+            }
+          }
+        ],
+        "rate_limiting": [
+          {
+            "targets": "url",
+            "operator": "matches_regex",
+            "value": "/api/search.*",
+            "settings": {
+              "requests_per_period": 30,
+              "period": 60,
+              "mitigation_timeout": 1800,
+              "mode": "simulate",
+              "anomaly": 50,
+              "action": "challenge"
+            }
+          },
+          {
+            "targets": "url",
+            "operator": "matches_regex",
+            "value": "/login.*",
+            "settings": {
+              "requests_per_period": 10,
+              "period": 300,
+              "mitigation_timeout": 3600,
+              "mode": "block",
+              "action": "block"
+            }
+          }
+        ],
+        "redirects": [
+          {
+            "from": "www.ainews.production.ai",
+            "to": "https://ainews.production.ai",
+            "status_code": 301,
+            "preserve_query_string": false,
+            "force_ssl": true
+          },
+          {
+            "from": "http://ainews.production.ai",
+            "to": "https://ainews.production.ai",
+            "status_code": 301,
+            "preserve_query_string": false,
+            "force_ssl": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "ainews.staging.ai",
+      "type": "full",
+      "ssl_mode": "full_strict",
+      "cache_level": "aggressive",
+      "minify": {
+        "css": true,
+        "js": true,
+        "html": true
+      },
+      "brotli": true,
+      "http2": true,
+      "http3": true,
+      "ipv6": true,
+      "security_level": "medium",
+      "challenge_ttl": 1800,
+      "rules": {
+        "caching": [
+          {
+            "targets": "file_extension",
+            "operator": "equals",
+            "value": "css",
+            "settings": {
+              "cache_level": "cache_everything",
+              "edge_cache_ttl": 86400,
+              "browser_ttl": 3600
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "workers": [
+    {
+      "name": "ai-news-worker",
+      "script": "worker.js",
+      "routes": [
+        "ainews.production.ai/api/*",
+        "*.ainews.production.ai/api/*"
+      ],
+      "environment": "production"
+    },
+    {
+      "name": "ai-news-cache-worker",
+      "script": "cache-worker.js",
+      "routes": [
+        "ainews.production.ai/*"
+      ],
+      "environment": "production"
+    }
+  ],
+  "zero_trust": {
+    "enabled": true,
+    "rules": [
+      {
+        "name": "admin-panel-access",
+        "expression": "http.request.uri.path matches \"^/admin/.*\"",
+        "settings": {
+          "identity_provider": "google",
+          "policies": [
+            {
+              "type": "identity",
+              "identity_type": "google",
+              "domain": "ainews.production.ai",
+              "required": true
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

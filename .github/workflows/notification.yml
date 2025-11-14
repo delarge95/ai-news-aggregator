@@ -1,0 +1,709 @@
+name: Notifications
+
+on:
+  workflow_run:
+    workflows:
+      - "Continuous Integration"
+      - "Security Scan"
+      - "Docker Build & Push"
+      - "Deploy to Staging"
+      - "Deploy to Production"
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      notification_type:
+        description: 'Type of notification to send'
+        required: true
+        default: 'deployment'
+        type: choice
+        options:
+          - deployment
+          - failure
+          - success
+          - maintenance
+      environment:
+        description: 'Environment for notification'
+        required: false
+        type: string
+      message:
+        description: 'Custom message'
+        required: false
+        type: string
+
+env:
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+  TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+  EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+  EMAIL_TO: ${{ secrets.EMAIL_TO }}
+  EMAIL_SMTP_SERVER: ${{ secrets.EMAIL_SMTP_SERVER }}
+  EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
+  EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
+  EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+
+jobs:
+  # Job 1: Parse workflow results
+  parse-workflow:
+    name: 📋 Parse Workflow Results
+    runs-on: ubuntu-latest
+    outputs:
+      workflow-name: ${{ steps.parse.outputs.workflow-name }}
+      status: ${{ steps.parse.outputs.status }}
+      conclusion: ${{ steps.parse.outputs.conclusion }}
+      environment: ${{ steps.parse.outputs.environment }}
+      trigger: ${{ steps.parse.outputs.trigger }}
+      build-info: ${{ steps.parse.outputs.build-info }}
+      deploy-info: ${{ steps.parse.outputs.deploy-info }}
+      artifacts: ${{ steps.parse.outputs.artifacts }}
+    steps:
+      - name: 📥 Download workflow artifacts
+        uses: actions/download-artifact@v3
+
+      - name: 📋 Parse workflow information
+        id: parse
+        run: |
+          echo "📋 Parsing workflow information..."
+          
+          # Extract workflow name
+          WORKFLOW_NAME="${{ github.event.workflow_run.name }}"
+          echo "workflow-name=$WORKFLOW_NAME" >> $GITHUB_OUTPUT
+          
+          # Extract status
+          STATUS="${{ github.event.workflow_run.status }}"
+          CONCLUSION="${{ github.event.workflow_run.conclusion }}"
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "conclusion=$CONCLUSION" >> $GITHUB_OUTPUT
+          
+          # Determine environment
+          if [[ "$WORKFLOW_NAME" == *"Staging"* ]]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          elif [[ "$WORKFLOW_NAME" == *"Production"* ]]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+          elif [[ "$WORKFLOW_NAME" == *"Security"* ]]; then
+            echo "environment=security" >> $GITHUB_OUTPUT
+          else
+            echo "environment=ci" >> $GITHUB_OUTPUT
+          fi
+          
+          # Extract trigger
+          TRIGGER="${{ github.event.workflow_run.event }}"
+          echo "trigger=$TRIGGER" >> $GITHUB_OUTPUT
+          
+          # Parse build info for Docker workflows
+          if [[ "$WORKFLOW_NAME" == *"Docker"* ]] && [ -f "build-summary.md" ]; then
+            echo "build-info=available" >> $GITHUB_OUTPUT
+          else
+            echo "build-info=not-available" >> $GITHUB_OUTPUT
+          fi
+          
+          # Parse deployment info
+          if [[ "$WORKFLOW_NAME" == *"Deploy"* ]]; then
+            echo "deploy-info=available" >> $GITHUB_OUTPUT
+          else
+            echo "deploy-info=not-available" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check for artifacts
+          if [ -d "." ] && [ "$(ls -A)" ]; then
+            echo "artifacts=available" >> $GITHUB_OUTPUT
+          else
+            echo "artifacts=not-available" >> $GITHUB_OUTPUT
+          fi
+
+  # Job 2: Slack notifications
+  slack-notifications:
+    name: 💬 Slack Notifications
+    runs-on: ubuntu-latest
+    needs: parse-workflow
+    if: always()
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 💬 Send CI success notification
+        if: needs.parse-workflow.outputs.workflow-name == 'Continuous Integration' && needs.parse-workflow.outputs.conclusion == 'success'
+        run: |
+          echo "💬 Sending CI success notification to Slack..."
+          
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"channel\": \"#ci-cd-pipeline\",
+              \"username\": \"GitHub Actions\",
+              \"icon_emoji\": \":white_check_mark:\",
+              \"attachments\": [
+                {
+                  \"color\": \"good\",
+                  \"title\": \"✅ CI Pipeline Success\",
+                  \"fields\": [
+                    {
+                      \"title\": \"Repository\",
+                      \"value\": \"${{ github.repository }}\",
+                      \"short\": true
+                    },
+                    {
+                      \"title\": \"Branch\",
+                      \"value\": \"${{ github.event.workflow_run.head_branch }}\",
+                      \"short\": true
+                    },
+                    {
+                      \"title\": \"Commit\",
+                      \"value\": \"${{ github.event.workflow_run.head_sha }}\",
+                      \"short\": true
+                    },
+                    {
+                      \"title\": \"Trigger\",
+                      \"value\": \"${{ needs.parse-workflow.outputs.trigger }}\",
+                      \"short\": true
+                    }
+                  ],
+                  \"footer\": \"GitHub Actions\",
+                  \"ts\": $(date +%s)
+                }
+              ]
+            }" \
+            ${{ env.SLACK_WEBHOOK_URL }}
+
+      - name: 💬 Send deployment notification
+        if: (needs.parse-workflow.outputs.workflow-name == 'Deploy to Staging' || needs.parse-workflow.outputs.workflow-name == 'Deploy to Production') && always()
+        run: |
+          echo "💬 Sending deployment notification to Slack..."
+          
+          # Determine emoji and color based on status
+          if [ "${{ needs.parse-workflow.outputs.conclusion }}" == "success" ]; then
+            EMOJI=":rocket:"
+            COLOR="good"
+            STATUS_TEXT="✅ Deployment Successful"
+          else
+            EMOJI=":x:"
+            COLOR="danger"
+            STATUS_TEXT="❌ Deployment Failed"
+          fi
+          
+          # Determine environment details
+          if [ "${{ needs.parse-workflow.outputs.environment }}" == "production" ]; then
+            CHANNEL="#production-alerts"
+            ENV_DETAILS="🌐 **PRODUCTION ENVIRONMENT**"
+          else
+            CHANNEL="#staging-deployments"
+            ENV_DETAILS="🧪 **STAGING ENVIRONMENT**"
+          fi
+          
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"channel\": \"$CHANNEL\",
+              \"username\": \"GitHub Actions\",
+              \"icon_emoji\": \"$EMOJI\",
+              \"attachments\": [
+                {
+                  \"color\": \"$COLOR\",
+                  \"title\": \"$STATUS_TEXT\",
+                  \"fields\": [
+                    {
+                      \"title\": \"Environment\",
+                      \"value\": \"${{ needs.parse-workflow.outputs.environment }}\",
+                      \"short\": true
+                    },
+                    {
+                      \"title\": \"Repository\",
+                      \"value\": \"${{ github.repository }}\",
+                      \"short\": true
+                    },
+                    {
+                      \"title\": \"Branch/Tag\",
+                      \"value\": \"${{ github.event.workflow_run.head_branch }}\",
+                      \"short\": true
+                    },
+                    {
+                      \"title\": \"Commit\",
+                      \"value\": \"${{ github.event.workflow_run.head_sha }}\",
+                      \"short\": true
+                    },
+                    {
+                      \"title\": \"Deployment ID\",
+                      \"value\": \"${{ github.run_id }}\",
+                      \"short\": true
+                    },
+                    {
+                      \"title\": \"Trigger\",
+                      \"value\": \"${{ needs.parse-workflow.outputs.trigger }}\",
+                      \"short\": true
+                    }
+                  ],
+                  \"footer\": \"GitHub Actions - Deployment Pipeline\",
+                  \"ts\": $(date +%s)
+                }
+              ]
+            }" \
+            ${{ env.SLACK_WEBHOOK_URL }}
+
+      - name: 💬 Send security scan notification
+        if: needs.parse-workflow.outputs.workflow-name == 'Security Scan'
+        run: |
+          echo "💬 Sending security scan notification to Slack..."
+          
+          if [ "${{ needs.parse-workflow.outputs.conclusion }}" == "success" ]; then
+            EMOJI=":shield:"
+            COLOR="warning"
+            STATUS_TEXT="🔒 Security Scan Completed"
+          else
+            EMOJI=":rotating_light:"
+            COLOR="danger"
+            STATUS_TEXT="🚨 Security Scan Issues Detected"
+          fi
+          
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"channel\": \"#security-alerts\",
+              \"username\": \"GitHub Actions\",
+              \"icon_emoji\": \"$EMOJI\",
+              \"attachments\": [
+                {
+                  \"color\": \"$COLOR\",
+                  \"title\": \"$STATUS_TEXT\",
+                  \"fields\": [
+                    {
+                      \"title\": \"Repository\",
+                      \"value\": \"${{ github.repository }}\",
+                      \"short\": true
+                    },
+                    {
+                      \"title\": \"Branch\",
+                      \"value\": \"${{ github.event.workflow_run.head_branch }}\",
+                      \"short\": true
+                    },
+                    {
+                      \"title\": \"Scan Type\",
+                      \"value\": \"Dependencies, Container, Code, Infrastructure\",
+                      \"short\": false
+                    }
+                  ],
+                  \"footer\": \"GitHub Actions - Security Pipeline\",
+                  \"ts\": $(date +%s)
+                }
+              ]
+            }" \
+            ${{ env.SLACK_WEBHOOK_URL }}
+
+  # Job 3: Microsoft Teams notifications
+  teams-notifications:
+    name: 📢 Teams Notifications
+    runs-on: ubuntu-latest
+    needs: parse-workflow
+    if: always()
+    steps:
+      - name: 📥 Download artifacts
+        uses: actions/download-artifact@v3
+
+      - name: 📢 Send Teams notification
+        if: always()
+        run: |
+          echo "📢 Sending notification to Microsoft Teams..."
+          
+          # Build adaptive card based on workflow type and status
+          if [ "${{ needs.parse-workflow.outputs.conclusion }}" == "success" ]; then
+            THEME_COLOR="00FF00"
+            STATUS_ICON="✔️"
+          else
+            THEME_COLOR="FF0000"
+            STATUS_ICON="❌"
+          fi
+          
+          if [ "${{ needs.parse-workflow.outputs.environment }}" == "production" ]; then
+            SEVERITY="Critical"
+          elif [ "${{ needs.parse-workflow.outputs.environment }}" == "staging" ]; then
+            SEVERITY="Important"
+          else
+            SEVERITY="Normal"
+          fi
+          
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"@type\": \"MessageCard\",
+              \"@context\": \"http://schema.org/extensions\",
+              \"summary\": \"$STATUS_ICON ${{ needs.parse-workflow.outputs.workflow-name }} - ${{ needs.parse-workflow.outputs.conclusion }}\",
+              \"themeColor\": \"$THEME_COLOR\",
+              \"sections\": [
+                {
+                  \"activityTitle\": \"$STATUS_ICON ${{ needs.parse-workflow.outputs.workflow-name }}\",
+                  \"activitySubtitle\": \"${{ needs.parse-workflow.outputs.environment }} environment\",
+                  \"activityImage\": \"https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png\",
+                  \"facts\": [
+                    {
+                      \"name\": \"Repository\",
+                      \"value\": \"${{ github.repository }}\"
+                    },
+                    {
+                      \"name\": \"Branch/Tag\",
+                      \"value\": \"${{ github.event.workflow_run.head_branch }}\"
+                    },
+                    {
+                      \"name\": \"Commit\",
+                      \"value\": \"${{ github.event.workflow_run.head_sha }}\"
+                    },
+                    {
+                      \"name\": \"Status\",
+                      \"value\": \"${{ needs.parse-workflow.outputs.conclusion }}\"
+                    },
+                    {
+                      \"name\": \"Trigger\",
+                      \"value\": \"${{ needs.parse-workflow.outputs.trigger }}\"
+                    },
+                    {
+                      \"name\": \"Run ID\",
+                      \"value\": \"${{ github.run_id }}\"
+                    }
+                  ],
+                  \"markdown\": true
+                }
+              ],
+              \"potentialAction\": [
+                {
+                  \"@type\": \"OpenUri\",
+                  \"name\": \"View in GitHub\",
+                  \"targets\": [
+                    {
+                      \"os\": \"default\",
+                      \"uri\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
+                    }
+                  ]
+                }
+              ]
+            }" \
+            ${{ env.TEAMS_WEBHOOK_URL }}
+
+  # Job 4: Email notifications
+  email-notifications:
+    name: 📧 Email Notifications
+    runs-on: ubuntu-latest
+    needs: parse-workflow
+    if: always()
+    steps:
+      - name: 📥 Download artifacts
+        uses: actions/download-artifact@v3
+
+      - name: 📧 Send email notification
+        if: always()
+        run: |
+          echo "📧 Sending email notification..."
+          
+          # Install mailutils for email sending
+          apt-get update && apt-get install -y mailutils
+            
+          # Create email content
+          cat > email_content.html <<EOF
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <style>
+                  body { font-family: Arial, sans-serif; margin: 20px; }
+                  .header { background-color: #f8f9fa; padding: 20px; border-radius: 5px; }
+                  .content { margin: 20px 0; }
+                  .footer { color: #6c757d; font-size: 12px; }
+                  .success { color: #28a745; }
+                  .failure { color: #dc3545; }
+                  .info { color: #17a2b8; }
+              </style>
+          </head>
+          <body>
+              <div class="header">
+                  <h2>$STATUS_ICON ${{ needs.parse-workflow.outputs.workflow-name }}</h2>
+                  <p><strong>Repository:</strong> ${{ github.repository }}</p>
+                  <p><strong>Environment:</strong> ${{ needs.parse-workflow.outputs.environment }}</p>
+                  <p><strong>Branch/Tag:</strong> ${{ github.event.workflow_run.head_branch }}</p>
+                  <p><strong>Commit:</strong> ${{ github.event.workflow_run.head_sha }}</p>
+                  <p><strong>Status:</strong> <span class="${{ needs.parse-workflow.outputs.conclusion }}">${{ needs.parse-workflow.outputs.conclusion }}</span></p>
+                  <p><strong>Trigger:</strong> ${{ needs.parse-workflow.outputs.trigger }}</p>
+              </div>
+              
+              <div class="content">
+                  <h3>Workflow Details</h3>
+                  <p><strong>Workflow Name:</strong> ${{ needs.parse-workflow.outputs.workflow-name }}</p>
+                  <p><strong>Run ID:</strong> ${{ github.run_id }}</p>
+                  <p><strong>Run Number:</strong> ${{ github.run_number }}</p>
+                  <p><strong>Run Attempt:</strong> ${{ github.run_attempt }}</p>
+              </div>
+              
+              <div class="footer">
+                  <p>Generated by GitHub Actions CI/CD Pipeline</p>
+                  <p>View details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>
+              </div>
+          </body>
+          </html>
+          EOF
+          
+          # Determine email subject based on status
+          if [ "${{ needs.parse-workflow.outputs.conclusion }}" == "success" ]; then
+            SUBJECT="✅ ${{ needs.parse-workflow.outputs.workflow-name }} - Success"
+          else
+            SUBJECT="❌ ${{ needs.parse-workflow.outputs.workflow-name }} - Failed"
+          fi
+          
+          # Add environment to subject
+          if [ "${{ needs.parse-workflow.outputs.environment }}" == "production" ]; then
+            SUBJECT="$SUBJECT [PRODUCTION]"
+          elif [ "${{ needs.parse-workflow.outputs.environment }}" == "staging" ]; then
+            SUBJECT="$SUBJECT [STAGING]"
+          fi
+          
+          # Send email using SMTP
+          echo "Sending email with subject: $SUBJECT"
+          
+          # Configure SMTP settings
+          if [ -n "$EMAIL_SMTP_SERVER" ]; then
+            sendmail -S "$EMAIL_SMTP_SERVER:$EMAIL_SMTP_PORT" \
+                     -f "$EMAIL_FROM" \
+                     -au "$EMAIL_USERNAME" \
+                     -ap "$EMAIL_PASSWORD" \
+                     "$EMAIL_TO" < email_content.html
+          else
+            echo "SMTP settings not configured, skipping email"
+          fi
+
+  # Job 5: Discord notifications
+  discord-notifications:
+    name: 🎮 Discord Notifications
+    runs-on: ubuntu-latest
+    needs: parse-workflow
+    if: always()
+    steps:
+      - name: 🎮 Send Discord notification
+        if: always()
+        run: |
+          echo "🎮 Sending Discord notification..."
+          
+          # Discord webhook
+          DISCORD_WEBHOOK_URL="${{ secrets.DISCORD_WEBHOOK_URL }}"
+          
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "Discord webhook not configured"
+            exit 0
+          fi
+          
+          # Determine emoji and color based on status
+          if [ "${{ needs.parse-workflow.outputs.conclusion }}" == "success" ]; then
+            EMOJI="✅"
+            COLOR=3447003  # Green
+          else
+            EMOJI="❌"
+            COLOR=15158332  # Red
+          fi
+          
+          # Create Discord embed
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"embeds\": [{
+                \"title\": \"$EMOJI ${{ needs.parse-workflow.outputs.workflow-name }}\",
+                \"description\": \"Status: ${{ needs.parse-workflow.outputs.conclusion }}\",
+                \"color\": $COLOR,
+                \"fields\": [
+                  {
+                    \"name\": \"Repository\",
+                    \"value\": \"${{ github.repository }}\",
+                    \"inline\": true
+                  },
+                  {
+                    \"name\": \"Environment\",
+                    \"value\": \"${{ needs.parse-workflow.outputs.environment }}\",
+                    \"inline\": true
+                  },
+                  {
+                    \"name\": \"Branch/Tag\",
+                    \"value\": \"${{ github.event.workflow_run.head_branch }}\",
+                    \"inline\": true
+                  },
+                  {
+                    \"name\": \"Commit\",
+                    \"value\": \"\`${{ github.event.workflow_run.head_sha }}\`\",
+                    \"inline\": true
+                  },
+                  {
+                    \"name\": \"Trigger\",
+                    \"value\": \"${{ needs.parse-workflow.outputs.trigger }}\",
+                    \"inline\": true
+                  }
+                ],
+                \"footer\": {
+                  \"text\": \"GitHub Actions CI/CD Pipeline\"
+                },
+                \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)\"
+              }]
+            }" \
+            "$DISCORD_WEBHOOK_URL"
+
+  # Job 6: Telegram notifications
+  telegram-notifications:
+    name: 📱 Telegram Notifications
+    runs-on: ubuntu-latest
+    needs: parse-workflow
+    if: always()
+    steps:
+      - name: 📱 Send Telegram notification
+        if: always()
+        run: |
+          echo "📱 Sending Telegram notification..."
+          
+          TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          TELEGRAM_CHAT_ID="${{ secrets.TELEGRAM_CHAT_ID }}"
+          
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram bot token or chat ID not configured"
+            exit 0
+          fi
+          
+          # Determine emoji based on status
+          if [ "${{ needs.parse-workflow.outputs.conclusion }}" == "success" ]; then
+            EMOJI="✅"
+          else
+            EMOJI="❌"
+          fi
+          
+          # Create message
+          MESSAGE="*$EMOJI ${{ needs.parse-workflow.outputs.workflow-name}}*\n\n"
+          MESSAGE+="*Repository:* ${{ github.repository }}\n"
+          MESSAGE+="*Environment:* ${{ needs.parse-workflow.outputs.environment }}\n"
+          MESSAGE+="*Branch/Tag:* ${{ github.event.workflow_run.head_branch }}\n"
+          MESSAGE+="*Commit:* \`${{ github.event.workflow_run.head_sha }}\`\n"
+          MESSAGE+="*Status:* ${{ needs.parse-workflow.outputs.conclusion }}\n"
+          MESSAGE+="*Trigger:* ${{ needs.parse-workflow.outputs.trigger }}\n"
+          MESSAGE+="*Run ID:* ${{ github.run_id }}\n\n"
+          MESSAGE+="[View in GitHub](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          
+          # Send message
+          curl -X POST \
+            "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"chat_id\": \"$TELEGRAM_CHAT_ID\",
+              \"text\": \"$MESSAGE\",
+              \"parse_mode\": \"Markdown\",
+              \"disable_web_page_preview\": true
+            }"
+
+  # Job 7: PagerDuty alerts (for production)
+  pagerduty-alerts:
+    name: 🚨 PagerDuty Alerts
+    runs-on: ubuntu-latest
+    needs: parse-workflow
+    if: always() && needs.parse-workflow.outputs.environment == 'production'
+    steps:
+      - name: 🚨 Send PagerDuty alert for production failures
+        if: needs.parse-workflow.outputs.environment == 'production' && needs.parse-workflow.outputs.conclusion == 'failure'
+        run: |
+          echo "🚨 Sending PagerDuty alert for production failure..."
+          
+          PAGERDUTY_INTEGRATION_KEY="${{ secrets.PAGERDUTY_INTEGRATION_KEY }}"
+          
+          if [ -z "$PAGERDUTY_INTEGRATION_KEY" ]; then
+            echo "PagerDuty integration key not configured"
+            exit 0
+          fi
+          
+          # Send event to PagerDuty Events API v2
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"routing_key\": \"$PAGERDUTY_INTEGRATION_KEY\",
+              \"event_action\": \"trigger\",
+              \"dedup_key\": \"${{ github.run_id }}\",
+              \"payload\": {
+                \"summary\": \"Production Deployment Failed - ${{ github.repository }}\",
+                \"severity\": \"critical\",
+                \"source\": \"github-actions\",
+                \"component\": \"${{ needs.parse-workflow.outputs.workflow-name }}\",
+                \"group\": \"${{ needs.parse-workflow.outputs.environment }}\",
+                \"class\": \"deployment_failure\",
+                \"custom_details\": {
+                  \"repository\": \"${{ github.repository }}\",
+                  \"branch\": \"${{ github.event.workflow_run.head_branch }}\",
+                  \"commit\": \"${{ github.event.workflow_run.head_sha }}\",
+                  \"workflow\": \"${{ needs.parse-workflow.outputs.workflow-name }}\",
+                  \"run_id\": \"${{ github.run_id }}\",
+                  \"run_url\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
+                }
+              },
+              \"links\": [
+                {
+                  \"href\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\",
+                  \"text\": \"View GitHub Actions Run\"
+                }
+              ]
+            }" \
+            "https://events.pagerduty.com/v2/enqueue"
+
+  # Job 8: Summary and cleanup
+  notification-summary:
+    name: 📊 Notification Summary
+    runs-on: ubuntu-latest
+    needs: [parse-workflow, slack-notifications, teams-notifications, email-notifications, discord-notifications, telegram-notifications, pagerduty-alerts]
+    if: always()
+    steps:
+      - name: 📊 Generate notification summary
+        run: |
+          echo "# 📊 Notification Summary" > notification-summary.md
+          echo "" >> notification-summary.md
+          echo "**Workflow:** ${{ needs.parse-workflow.outputs.workflow-name }}" >> notification-summary.md
+          echo "**Status:** ${{ needs.parse-workflow.outputs.conclusion }}" >> notification-summary.md
+          echo "**Environment:** ${{ needs.parse-workflow.outputs.environment }}" >> notification-summary.md
+          echo "**Repository:** ${{ github.repository }}" >> notification-summary.md
+          echo "**Run ID:** ${{ github.run_id }}" >> notification-summary.md
+          echo "" >> notification-summary.md
+          
+          echo "## 📢 Channels Notified" >> notification-summary.md
+          echo "" >> notification-summary.md
+          
+          # Check which notifications were sent
+          if [ -n "$SLACK_WEBHOOK_URL" ]; then
+            echo "✅ Slack: Sent" >> notification-summary.md
+          else
+            echo "❌ Slack: Not configured" >> notification-summary.md
+          fi
+          
+          if [ -n "$TEAMS_WEBHOOK_URL" ]; then
+            echo "✅ Microsoft Teams: Sent" >> notification-summary.md
+          else
+            echo "❌ Microsoft Teams: Not configured" >> notification-summary.md
+          fi
+          
+          if [ -n "$EMAIL_FROM" ] && [ -n "$EMAIL_TO" ]; then
+            echo "✅ Email: Sent" >> notification-summary.md
+          else
+            echo "❌ Email: Not configured" >> notification-summary.md
+          fi
+          
+          if [ -n "$DISCORD_WEBHOOK_URL" ]; then
+            echo "✅ Discord: Sent" >> notification-summary.md
+          else
+            echo "❌ Discord: Not configured" >> notification-summary.md
+          fi
+          
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            echo "✅ Telegram: Sent" >> notification-summary.md
+          else
+            echo "❌ Telegram: Not configured" >> notification-summary.md
+          fi
+          
+          if [ "${{ needs.parse-workflow.outputs.environment }}" == "production" ] && [ -n "$PAGERDUTY_INTEGRATION_KEY" ]; then
+            echo "✅ PagerDuty: Sent" >> notification-summary.md
+          elif [ "${{ needs.parse-workflow.outputs.environment }}" == "production" ]; then
+            echo "❌ PagerDuty: Not configured" >> notification-summary.md
+          else
+            echo "⏭️  PagerDuty: Skipped (not production)" >> notification-summary.md
+          fi
+          
+          echo "" >> notification-summary.md
+          echo "## 📋 Summary" >> notification-summary.md
+          
+          if [ "${{ needs.parse-workflow.outputs.conclusion }}" == "success" ]; then
+            echo "🎉 All notifications sent successfully!" >> notification-summary.md
+          else
+            echo "⚠️  Some notifications may have failed. Please check the logs." >> notification-summary.md
+          fi
+          
+          cat notification-summary.md
+
+      - name: 📁 Upload notification summary
+        uses: actions/upload-artifact@v3
+        with:
+          name: notification-summary-${{ github.run_id }}
+          path: notification-summary.md
+          retention-days: 30

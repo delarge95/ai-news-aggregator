@@ -1,0 +1,303 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: ai_news_postgres_prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ai_news_db
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - ai_news_backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ai_news_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: ai_news_redis_prod
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redispass}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - ai_news_backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:-redispass}", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.25'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+      target: production
+    container_name: ai_news_backend_prod
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/ai_news_db
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redispass}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-redispass}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redispass}@redis:6379/1
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - API_WORKERS=4
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - backend_logs:/app/logs
+    networks:
+      - ai_news_backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+
+  # Celery Worker
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+      target: production
+    container_name: ai_news_celery_prod
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/ai_news_db
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redispass}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-redispass}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redispass}@redis:6379/1
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+    volumes:
+      - backend_logs:/app/logs
+    networks:
+      - ai_news_backend
+    depends_on:
+      - postgres
+      - redis
+    command: celery -A app.celery worker --loglevel=info --concurrency=2 --prefetch-multiplier=1
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.75'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    scale: 2
+
+  # Celery Beat (Scheduler)
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+      target: production
+    container_name: ai_news_celery_beat_prod
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/ai_news_db
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redispass}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-redispass}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redispass}@redis:6379/1
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+    volumes:
+      - backend_logs:/app/logs
+    networks:
+      - ai_news_backend
+    depends_on:
+      - postgres
+      - redis
+    command: celery -A app.celery beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.25'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+
+  # Frontend (React)
+  frontend:
+    build:
+      context: ./frontend/ai-news-frontend
+      dockerfile: Dockerfile.prod
+      target: production
+    container_name: ai_news_frontend_prod
+    restart: unless-stopped
+    networks:
+      - ai_news_backend
+      - ai_news_frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: ai_news_nginx_prod
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - frontend_build:/usr/share/nginx/html:ro
+      - nginx_logs:/var/log/nginx
+    networks:
+      - ai_news_frontend
+    depends_on:
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+volumes:
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/postgres
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/redis
+  backend_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/logs/backend
+  frontend_build:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/frontend
+  nginx_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/logs/nginx
+
+networks:
+  ai_news_backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+  ai_news_frontend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16

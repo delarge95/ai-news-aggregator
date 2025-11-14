@@ -1,0 +1,239 @@
+# Traefik Dynamic Configuration
+# Description: Dynamic configuration for middlewares and routing
+
+http:
+  middlewares:
+    # Security headers middleware
+    security-headers:
+      headers:
+        accessControlAllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+        accessControlMaxAge: 100
+        hostsProxyHeaders:
+          - "X-Forwarded-Host"
+        referrerPolicy: "strict-origin-when-cross-origin"
+        stsSeconds: 63072000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        frameDeny: true
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+        customResponseHeaders:
+          X-Frame-Options: "DENY"
+          X-Content-Type-Options: "nosniff"
+          X-XSS-Protection: "1; mode=block"
+          Strict-Transport-Security: "max-age=31536000; includeSubDomains; preload"
+          Content-Security-Policy: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' fonts.googleapis.com; font-src 'self' fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' wss: ws:;"
+
+    # Rate limiting middleware
+    rate-limit:
+      rateLimit:
+        burst: 100
+        average: 50
+
+    # Basic auth middleware for admin panel
+    admin-auth:
+      basicAuth:
+        users:
+          - "admin:$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi"  # password: password
+
+    # Redirect HTTPS middleware
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+    # Compression middleware
+    compression:
+      compress: {}
+
+    # CORS middleware for API
+    cors:
+      headers:
+        accessControlAllowCredentials: true
+        accessControlAllowHeaders:
+          - Content-Type
+          - Authorization
+          - X-Requested-With
+        accessControlAllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        accessControlMaxAge: 86400
+        accessControlAllowOriginList:
+          - "https://ai-news-aggregator.com"
+          - "https://www.ai-news-aggregator.com"
+
+    # IP whitelist middleware for admin
+    admin-whitelist:
+      ipWhiteList:
+        sourceRange:
+          - "127.0.0.1/32"
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+
+    # Circuit breaker middleware
+    circuit-breaker:
+      circuitBreaker:
+        expression: NetworkErrorRatio() > 0.3 || ResponseCodeRatio(500, 600, 0, 600) > 0.3
+
+    # Retry middleware
+    retry:
+      retry:
+        attempts: 3
+
+  # Service configuration
+  services:
+    # Load balancer service
+    ai-news-app:
+      loadBalancer:
+        servers:
+          - url: "http://web-01:8000"
+          - url: "http://web-02:8000"
+          - url: "http://web-03:8000"
+        healthCheck:
+          path: "/health"
+          interval: 30s
+          timeout: 3s
+          retries: 3
+
+    # WebSocket service
+    ai-news-websocket:
+      loadBalancer:
+        servers:
+          - url: "http://web-01:8001"
+          - url: "http://web-02:8001"
+          - url: "http://web-03:8001"
+
+    # Monitoring services
+    prometheus-service:
+      loadBalancer:
+        servers:
+          - url: "http://prometheus:9090"
+
+    grafana-service:
+      loadBalancer:
+        servers:
+          - url: "http://grafana:3000"
+
+    alertmanager-service:
+      loadBalancer:
+        servers:
+          - url: "http://alertmanager:9093"
+
+  # Router configuration
+  routers:
+    # Main application router
+    ai-news-app:
+      rule: "Host(`ai-news-aggregator.com`, `www.ai-news-aggregator.com`)"
+      service: "ai-news-app"
+      tls:
+        certresolver: letsencrypt
+      entryPoints:
+        - websecure
+      middlewares:
+        - security-headers
+        - rate-limit
+        - compression
+
+    # API router
+    ai-news-api:
+      rule: "Host(`ai-news-aggregator.com`) && PathPrefix(`/api/`)"
+      service: "ai-news-app"
+      tls:
+        certresolver: letsencrypt
+      entryPoints:
+        - websecure
+      middlewares:
+        - security-headers
+        - cors
+        - rate-limit
+
+    # WebSocket router
+    ai-news-ws:
+      rule: "Host(`ai-news-aggregator.com`) && PathPrefix(`/ws/`)"
+      service: "ai-news-websocket"
+      tls:
+        certresolver: letsencrypt
+      entryPoints:
+        - websecure
+      middlewares:
+        - security-headers
+
+    # Prometheus router
+    prometheus:
+      rule: "Host(`prometheus.ai-news-aggregator.com`)"
+      service: "prometheus-service"
+      tls:
+        certresolver: letsencrypt
+      entryPoints:
+        - websecure
+      middlewares:
+        - security-headers
+        - admin-auth
+        - admin-whitelist
+
+    # Grafana router
+    grafana:
+      rule: "Host(`monitoring.ai-news-aggregator.com`)"
+      service: "grafana-service"
+      tls:
+        certresolver: letsencrypt
+      entryPoints:
+        - websecure
+      middlewares:
+        - security-headers
+        - admin-auth
+        - admin-whitelist
+
+    # Alertmanager router
+    alertmanager:
+      rule: "Host(`alertmanager.ai-news-aggregator.com`)"
+      service: "alertmanager-service"
+      tls:
+        certresolver: letsencrypt
+      entryPoints:
+        - websecure
+      middlewares:
+        - security-headers
+        - admin-auth
+        - admin-whitelist
+
+    # Traefik dashboard router
+    traefik-dashboard:
+      rule: "Host(`traefik.ai-news-aggregator.com`)"
+      service: "api@internal"
+      tls:
+        certresolver: letsencrypt
+      entryPoints:
+        - websecure
+      middlewares:
+        - security-headers
+        - admin-auth
+        - admin-whitelist
+
+# TLS configuration
+tls:
+  options:
+    default:
+      minVersion: "VersionTLS12"
+      cipherSuites:
+        - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+        - "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
+        - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+        - "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256"
+      curvePreferences:
+        - CurveP521
+        - CurveP384
+      alpnProtocols:
+        - "h2"
+        - "http/1.1"
+      sniStrict: true

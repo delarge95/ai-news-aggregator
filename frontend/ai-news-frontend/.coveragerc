@@ -1,0 +1,123 @@
+# Frontend Coverage Configuration
+# Configuración de coverage para el frontend
+
+[run]
+source = src
+branch = true
+parallel = true
+
+# Output directories and files
+omit = 
+    # Exclude test files and test utilities
+    src/test/*
+    *.test.ts
+    *.test.tsx
+    *.spec.ts
+    *.spec.tsx
+    test-utils.tsx
+    setup.ts
+    
+    # Exclude main entry files
+    src/main.tsx
+    src/vite-env.d.ts
+    
+    # Exclude configuration files
+    vite.config.ts
+    tsconfig.json
+    tsconfig.*.json
+    *.config.*
+    
+    # Exclude generated files
+    dist/
+    build/
+    node_modules/
+    coverage/
+    
+    # Exclude types and interfaces
+    src/types/*
+    src/**/*.d.ts
+    
+    # Exclude external utilities
+    src/lib/utils.ts
+    src/hooks/useIntersectionObserver.ts
+
+include = 
+    src/components/
+    src/pages/
+    src/hooks/
+    src/services/
+    src/utils/
+    src/stores/
+
+[report]
+# Report configuration
+exclude_lines =
+    # Standard JavaScript/TypeScript excludes
+    pragma: no cover
+    console\.(log|warn|error)
+    debugger
+    return
+    throw new Error
+    throw
+    if \(false\) {.*?}
+    if \(0\) {.*?}
+    if \(null\) {.*?}
+    
+    # React excludes
+    return null
+    return undefined
+    <.*?\/>
+    
+    # Development and testing
+    \/\* eslint-disable .*?\*\/
+    \/\/ @ts-ignore
+    
+    # Component exports for external use
+    export default
+    export const
+
+# Show missing lines
+show_missing = true
+skip_covered = false
+
+# Precision for percentages
+precision = 2
+
+# Fail under threshold
+fail_under = 80
+
+[html]
+# HTML report configuration
+directory = coverage
+title = AI News Aggregator Frontend - Coverage Report
+
+# Additional HTML options
+show_contexts = true
+skip_covered = false
+
+[xml]
+# XML report configuration
+output = coverage.xml
+
+[json]
+# JSON report configuration
+output = coverage.json
+pretty_print = True
+
+# Minimum coverage thresholds
+fail_under = 80
+
+[paths]
+# Path mapping for consistent coverage reporting
+source =
+    src/
+    */src/
+
+# Coverage context configuration for CI/CD
+contexts = 
+    ci
+    local
+    github-actions
+
+# Parallel mode settings for distributed testing
+concurrency = thread

@@ -1,0 +1,153 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: ai_news_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ai_news_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_news_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - ai_news_network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: ai_news_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass redispass
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - ai_news_network
+
+  # Backend API - Using base Python image
+  backend:
+    image: python:3.11-slim
+    container_name: ai_news_backend
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "pip install --no-cache-dir -q -r requirements.txt && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/ai_news_db
+      - REDIS_URL=redis://:redispass@redis:6379/0
+      - CELERY_BROKER_URL=redis://:redispass@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:redispass@redis:6379/1
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./logs:/app/logs
+      - /app/__pycache__
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ai_news_network
+
+  # Celery Worker
+  celery_worker:
+    image: python:3.11-slim
+    container_name: ai_news_celery_worker
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "pip install --no-cache-dir -q -r requirements.txt && celery -A app.celery worker --loglevel=info"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/ai_news_db
+      - REDIS_URL=redis://:redispass@redis:6379/0
+      - CELERY_BROKER_URL=redis://:redispass@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:redispass@redis:6379/1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./backend:/app
+      - ./logs:/app/logs
+      - /app/__pycache__
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ai_news_network
+
+  # Celery Beat
+  celery_beat:
+    image: python:3.11-slim
+    container_name: ai_news_celery_beat
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "pip install --no-cache-dir -q -r requirements.txt && celery -A app.celery beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/ai_news_db
+      - REDIS_URL=redis://:redispass@redis:6379/0
+      - CELERY_BROKER_URL=redis://:redispass@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:redispass@redis:6379/1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./backend:/app
+      - ./logs:/app/logs
+      - /app/__pycache__
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ai_news_network
+
+  # Frontend - Using Node base image
+  frontend:
+    image: node:18-alpine
+    container_name: ai_news_frontend
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "npm install -g pnpm && pnpm install --frozen-lockfile --prefer-offline && pnpm run build:prod && pnpm preview --host 0.0.0.0"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000/api/v1
+      - NODE_OPTIONS=--max-old-space-size=2048
+      - NODE_ENV=production
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/ai-news-frontend:/app
+      - /app/node_modules
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - ai_news_network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  ai_news_network:
+    driver: bridge

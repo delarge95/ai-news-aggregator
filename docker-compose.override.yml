@@ -1,0 +1,157 @@
+# Override configuration for development environment
+# This file is automatically loaded by docker-compose and overrides settings from docker-compose.prod.yml
+
+services:
+  postgres:
+    environment:
+      POSTGRES_DB: ai_news_dev_db
+      POSTGRES_USER: dev_user
+      POSTGRES_PASSWORD: dev_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.25"
+
+  redis:
+    command: redis-server --appendonly yes
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_dev_data:/data
+    healthcheck:
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.1"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://dev_user:dev_password@postgres:5432/ai_news_dev_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+      - API_WORKERS=1
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./backend:/app
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://dev_user:dev_password@postgres:5432/ai_news_dev_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./backend:/app
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A celery_app worker --loglevel=debug --concurrency=1 --prefetch-multiplier=1
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://dev_user:dev_password@postgres:5432/ai_news_dev_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./backend:/app
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A celery_app beat --loglevel=debug # Using default PersistentScheduler (removed django_celery_beat dependency)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  frontend:
+    build:
+      context: ./frontend/ai-news-frontend
+      dockerfile: ../Dockerfile
+    environment:
+      - REACT_APP_API_URL=http://localhost:8001/api/v1
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./frontend/ai-news-frontend:/app # Fixed: was ./frontend:/app (missing package.json)
+      - /app/node_modules
+    depends_on:
+      backend:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # nginx:
+  #   ports:
+  #     - "8080:80"
+  #   volumes:
+  #     - ./docker/nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro
+  #   # healthcheck disabled for development
+
+volumes:
+  postgres_dev_data:
+  redis_dev_data:

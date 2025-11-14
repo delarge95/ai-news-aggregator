@@ -1,0 +1,86 @@
+---
+# Ansible Role: Docker Installation and Configuration
+# Description: Install and configure Docker and Docker Compose
+
+- name: Install Docker dependencies
+  apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+    state: present
+
+- name: Add Docker's official GPG key
+  get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /tmp/docker.gpg
+    mode: '0644'
+  register: docker_gpg_download
+
+- name: Import Docker GPG key
+  command: gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg /tmp/docker.gpg
+  when: docker_gpg_download.changed
+
+- name: Add Docker repository
+  get_url:
+    url: https://download.docker.com/linux/ubuntu/dists/{{ ansible_lsb.codename }}/pool/stable/amd64/docker-ce_{{ docker_version | default('5:20.10.24~3-0~ubuntu-{{ ansible_lsb.codename }}') }}_amd64.deb
+    dest: /tmp/docker.deb
+  when: false
+
+- name: Install Docker from repository
+  apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-compose-plugin
+    state: present
+    update_cache: yes
+
+- name: Ensure docker group exists
+  group:
+    name: docker
+    state: present
+
+- name: Add user to docker group
+  user:
+    name: "{{ item }}"
+    groups: docker
+    append: yes
+  loop: "{{ docker_users | default([app_user]) }}"
+
+- name: Ensure Docker service is enabled and started
+  systemd:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Create Docker compose directory
+  file:
+    path: "{{ project_root }}"
+    state: directory
+    mode: '0755'
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+
+- name: Install Docker Compose
+  get_url:
+    url: "https://github.com/docker/compose/releases/download/{{ docker_compose_version | default('v2.20.0') }}/docker-compose-{{ ansible_system }}-{{ ansible_architecture }}"
+    dest: /usr/local/bin/docker-compose
+    mode: '0755'
+
+- name: Create Docker daemon configuration
+  template:
+    src: daemon.json.j2
+    dest: /etc/docker/daemon.json
+  notify: restart docker
+
+- name: Create logrotate configuration for Docker
+  template:
+    src: docker.logrotate.j2
+    dest: /etc/logrotate.d/docker-containers
+    owner: root
+    group: root
+    mode: '0644'

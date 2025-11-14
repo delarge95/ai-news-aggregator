@@ -1,0 +1,15 @@
+{
+  "*.{js,jsx,ts,tsx}": [
+    "eslint --fix",
+    "prettier --write"
+  ],
+  "*.{json,md,yml,yaml}": [
+    "prettier --write"
+  ],
+  "*.{css,scss,less}": [
+    "prettier --write"
+  ],
+  "*.{png,jpg,jpeg,gif,svg}": [
+    "echo 'Image files skipped from linting'"
+  ]
+}

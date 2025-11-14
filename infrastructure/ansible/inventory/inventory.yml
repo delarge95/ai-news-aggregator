@@ -1,0 +1,166 @@
+---
+# Ansible Inventory for AI News Aggregator Infrastructure
+
+all:
+  children:
+    # Production Environment
+    prod:
+      hosts:
+        web-01.prod.ai-news-aggregator.com:
+          ansible_host: 203.0.113.1
+          server_type: web
+          environment: prod
+          droplet_size: s-4vcpu-8gb
+          region: nyc3
+        web-02.prod.ai-news-aggregator.com:
+          ansible_host: 203.0.113.2
+          server_type: web
+          environment: prod
+          droplet_size: s-4vcpu-8gb
+          region: nyc3
+        web-03.prod.ai-news-aggregator.com:
+          ansible_host: 203.0.113.3
+          server_type: web
+          environment: prod
+          droplet_size: s-4vcpu-8gb
+          region: nyc3
+        worker-01.prod.ai-news-aggregator.com:
+          ansible_host: 203.0.113.4
+          server_type: worker
+          environment: prod
+          droplet_size: s-4vcpu-8gb
+          region: nyc3
+        worker-02.prod.ai-news-aggregator.com:
+          ansible_host: 203.0.113.5
+          server_type: worker
+          environment: prod
+          droplet_size: s-4vcpu-8gb
+          region: nyc3
+        monitoring.prod.ai-news-aggregator.com:
+          ansible_host: 203.0.113.6
+          server_type: monitoring
+          environment: prod
+          droplet_size: s-2vcpu-4gb
+          region: nyc3
+
+    # Staging Environment  
+    staging:
+      hosts:
+        web-01.staging.ai-news-aggregator.com:
+          ansible_host: 203.0.113.10
+          server_type: web
+          environment: staging
+          droplet_size: s-2vcpu-4gb
+          region: nyc3
+        worker-01.staging.ai-news-aggregator.com:
+          ansible_host: 203.0.113.11
+          server_type: worker
+          environment: staging
+          droplet_size: s-2vcpu-4gb
+          region: nyc3
+        monitoring.staging.ai-news-aggregator.com:
+          ansible_host: 203.0.113.12
+          server_type: monitoring
+          environment: staging
+          droplet_size: s-1vcpu-2gb
+          region: nyc3
+
+    # Development Environment
+    dev:
+      hosts:
+        web-01.dev.ai-news-aggregator.com:
+          ansible_host: 203.0.113.20
+          server_type: web
+          environment: dev
+          droplet_size: s-1vcpu-2gb
+          region: nyc3
+        worker-01.dev.ai-news-aggregator.com:
+          ansible_host: 203.0.113.21
+          server_type: worker
+          environment: dev
+          droplet_size: s-1vcpu-2gb
+          region: nyc3
+
+  vars:
+    ansible_user: root
+    ansible_ssh_private_key_file: ~/.ssh/ai-news-prod.key
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+    project_name: ai-news-aggregator
+    app_user: deploy
+    node_env: production
+    
+    # Database configuration
+    database_host: main-cluster
+    database_name: ai_news_aggregator
+    database_user: app_user
+    
+    # SSL Configuration
+    ssl_email: admin@ai-news-aggregator.com
+    ssl_domains:
+      - ai-news-aggregator.com
+      - www.ai-news-aggregator.com
+      - api.ai-news-aggregator.com
+      - admin.ai-news-aggregator.com
+    
+    # Docker configuration
+    docker_users:
+      - deploy
+      - www-data
+    
+    # Monitoring configuration
+    prometheus_retention: "30d"
+    grafana_admin_password: "{{ vault_grafana_admin_password }}"
+    
+    # Backup configuration
+    backup_retention_days: 30
+    backup_s3_bucket: ai-news-aggregator-backups
+    
+    # Application configuration
+    app_port: 8000
+    ws_port: 8001
+    nginx_port: 80
+    ssl_port: 443
+    
+    # Security settings
+    fail2ban_enabled: true
+    ufw_enabled: true
+    ssh_port: 22
+    allowed_ssh_keys: 
+      - ~/.ssh/ai-news-prod.key.pub
+
+  # Server type groups
+  web_servers:
+    hosts:
+      web-01.prod.ai-news-aggregator.com:
+      web-02.prod.ai-news-aggregator.com:
+      web-03.prod.ai-news-aggregator.com:
+      web-01.staging.ai-news-aggregator.com:
+      web-01.dev.ai-news-aggregator.com:
+    vars:
+      server_type: web
+      services:
+        - nginx
+        - docker
+      
+  worker_servers:
+    hosts:
+      worker-01.prod.ai-news-aggregator.com:
+      worker-02.prod.ai-news-aggregator.com:
+      worker-01.staging.ai-news-aggregator.com:
+      worker-01.dev.ai-news-aggregator.com:
+    vars:
+      server_type: worker
+      services:
+        - docker
+        - redis
+      
+  monitoring_servers:
+    hosts:
+      monitoring.prod.ai-news-aggregator.com:
+      monitoring.staging.ai-news-aggregator.com:
+    vars:
+      server_type: monitoring
+      services:
+        - prometheus
+        - grafana
+        - node-exporter

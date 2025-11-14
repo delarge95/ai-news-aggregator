@@ -1,0 +1,154 @@
+---
+# Ansible Playbook for AI News Aggregator Infrastructure
+# Description: Complete server configuration and application deployment
+# Usage: ansible-playbook -i inventory/inventory.yml playbooks/site.yml
+
+- name: Configure and Deploy AI News Aggregator
+  hosts: all
+  become: yes
+  become_method: sudo
+  gather_facts: yes
+  vars:
+    project_name: "ai-news-aggregator"
+    project_root: "/opt/{{ project_name }}"
+    app_user: "deploy"
+    app_port: 80
+    ssl_port: 443
+    node_env: "production"
+  
+  pre_tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+    
+    - name: Install required system packages
+      apt:
+        name: 
+          - curl
+          - wget
+          - git
+          - unzip
+          - software-properties-common
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - lsb-release
+          - htop
+          - fail2ban
+          - ufw
+          - logrotate
+        state: present
+    
+    - name: Configure UFW firewall
+      ufw:
+        state: enabled
+        policy: deny
+        rules:
+          - rule: allow
+            port: 22
+            proto: tcp
+            from: "0.0.0.0/0"
+          - rule: allow
+            port: "{{ app_port }}"
+            proto: tcp
+            from: "0.0.0.0/0"
+          - rule: allow
+            port: "{{ ssl_port }}"
+            proto: tcp
+            from: "0.0.0.0/0"
+          - rule: allow
+            port: 9090
+            proto: tcp
+            from: "10.244.0.0/16"
+          - rule: allow
+            port: 6379
+            proto: tcp
+            from: "10.244.0.0/16"
+    
+    - name: Configure fail2ban
+      template:
+        src: fail2ban-jail.local.j2
+        dest: /etc/fail2ban/jail.local
+      notify: restart fail2ban
+  
+  roles:
+    - docker
+    - nginx
+    - ssl
+    - monitoring
+    - backup
+
+  post_tasks:
+    - name: Create deployment script
+      template:
+        src: deploy.sh.j2
+        dest: "{{ project_root }}/deploy.sh"
+        mode: '0755'
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+    
+    - name: Create environment file
+      template:
+        src: .env.production.j2
+        dest: "{{ project_root }}/.env"
+        mode: '0600'
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+    
+    - name: Set proper permissions
+      file:
+        path: "{{ project_root }}"
+        state: directory
+        mode: '0755'
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        recurse: yes
+    
+    - name: Enable and start services
+      systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      loop:
+        - nginx
+        - docker
+    
+    - name: Verify installation
+      uri:
+        url: "http://localhost{{ health_endpoint | default('/health') }}"
+        status_code: 200
+      register: health_check
+      failed_when: health_check.status != 200
+      when: "'web' in group_names"
+
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+    
+    - name: restart fail2ban
+      systemd:
+        name: fail2ban
+        state: restarted
+    
+    - name: restart prometheus
+      systemd:
+        name: prometheus
+        state: restarted
+    
+    - name: restart grafana-server
+      systemd:
+        name: grafana-server
+        state: restarted
+
+  tasks:
+    - name: Create log directories
+      file:
+        path: "/var/log/{{ project_name }}"
+        state: directory
+        mode: '0755'
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"

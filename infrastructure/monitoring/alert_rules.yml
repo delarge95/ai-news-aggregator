@@ -1,0 +1,233 @@
+# Prometheus Alert Rules for AI News Aggregator
+# Description: Critical alerts for system health and performance
+
+groups:
+  - name: ai-news-aggregator.rules
+    rules:
+      # High-level application alerts
+      
+      - alert: ApplicationDown
+        expr: up{job="ai-news-web"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: web
+        annotations:
+          summary: "AI News Aggregator web application is down"
+          description: "The web application has been down for more than 1 minute."
+          runbook_url: "https://docs.ai-news-aggregator.com/runbooks/application-down"
+
+      - alert: HighErrorRate
+        expr: |
+          (
+            rate(http_requests_total{job="ai-news-web",status=~"5.."}[5m]) /
+            rate(http_requests_total{job="ai-news-web"}[5m])
+          ) * 100 > 5
+        for: 2m
+        labels:
+          severity: warning
+          service: web
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value }}% for the last 5 minutes."
+          runbook_url: "https://docs.ai-news-aggregator.com/runbooks/high-error-rate"
+
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="ai-news-web"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: web
+        annotations:
+          summary: "High response time"
+          description: "95th percentile response time is {{ $value }}s for the last 5 minutes."
+
+      # Database alerts
+      
+      - alert: DatabaseDown
+        expr: up{job="postgresql"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: database
+        annotations:
+          summary: "PostgreSQL database is down"
+          description: "Database connection failed for more than 1 minute."
+
+      - alert: DatabaseConnectionHigh
+        expr: pg_stat_activity_count > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: database
+        annotations:
+          summary: "High number of database connections"
+          description: "Database has {{ $value }} active connections."
+
+      - alert: DatabaseSlowQueries
+        expr: rate(pg_stat_statements_mean_time[5m]) > 1000
+        for: 3m
+        labels:
+          severity: warning
+          service: database
+        annotations:
+          summary: "Database slow queries detected"
+          description: "Average query time is {{ $value }}ms."
+
+  - name: system.rules
+    rules:
+      # System resource alerts
+      
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is above 80% for more than 5 minutes on {{ $labels.instance }}."
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is above 85% for more than 3 minutes on {{ $labels.instance }}."
+
+      - alert: HighDiskUsage
+        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk usage"
+          description: "Disk usage is above 85% on {{ $labels.instance }}:{{ $labels.mountpoint }}."
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes{fstype!="tmpfs"} / 1024^3) < 2
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk space critically low"
+          description: "Less than 2GB available on {{ $labels.instance }}:{{ $labels.mountpoint }}."
+
+      - alert: LoadAverageHigh
+        expr: node_load1 > (count(node_cpu_seconds_total{mode="idle"}) by (instance)) * 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High load average"
+          description: "Load average is {{ $value }} on {{ $labels.instance }}."
+
+  - name: network.rules
+    rules:
+      # Network and connectivity alerts
+      
+      - alert: NetworkInterfaceDown
+        expr: up{job="node-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Network interface down"
+          description: "Network interface {{ $labels.device }} is down on {{ $labels.instance }}."
+
+      - alert: NetworkPacketLoss
+        expr: rate(node_network_receive_errs_total[5m]) > 10 or rate(node_network_transmit_errs_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Network packet loss detected"
+          description: "Packet loss detected on {{ $labels.instance }}:{{ $labels.device }}."
+
+  - name: docker.rules
+    rules:
+      # Docker container alerts
+      
+      - alert: ContainerDown
+        expr: container_up{image!=""} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container down"
+          description: "Container {{ $labels.name }} is down on {{ $labels.instance }}."
+
+      - alert: ContainerHighRestartCount
+        expr: increase(container_start_time_seconds[1h]) > 5
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container high restart count"
+          description: "Container {{ $labels.name }} has restarted {{ $value }} times in the last hour."
+
+  - name: security.rules
+    rules:
+      # Security-related alerts
+      
+      - alert: FailedSSHAttempts
+        expr: increase(node_ssh_failed_attempts_total[5m]) > 10
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High number of failed SSH attempts"
+          description: "{{ $value }} failed SSH attempts detected in the last 5 minutes."
+
+      - alert: SSL证书即将过期
+        expr: (ssl_certificate_expiry_seconds - time()) / 86400 < 30
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "SSL证书即将过期"
+          description: "SSL证书将在 {{ $value }} 天后过期。"
+
+      - alert: SecurityScanFailed
+        expr: fail2ban_jail_failed > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "安全扫描检测到大量攻击"
+          description: "检测到 {{ $value }} 次失败的安全扫描尝试。"
+
+  - name: infrastructure.rules
+    rules:
+      # Infrastructure-specific alerts
+      
+      - alert: LoadBalancerDown
+        expr: up{job="load-balancer"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: load-balancer
+        annotations:
+          summary: "Load balancer is down"
+          description: "Load balancer has been down for more than 1 minute."
+
+      - alert: MonitoringDown
+        expr: up{job=~"prometheus|node-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: monitoring
+        annotations:
+          summary: "Monitoring system down"
+          description: "Monitoring system {{ $labels.job }} is down for more than 2 minutes."
+
+      - alert: BackupFailed
+        expr: time() - backup_last_success_timestamp > 86400
+        for: 0m
+        labels:
+          severity: critical
+          service: backup
+        annotations:
+          summary: "Backup process failed"
+          description: "No successful backup in the last 24 hours."

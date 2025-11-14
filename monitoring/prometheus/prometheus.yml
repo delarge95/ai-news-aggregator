@@ -1,0 +1,122 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'ai-news-aggregator'
+    environment: 'production'
+
+rule_files:
+  - "alert_rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 5s
+
+  # Node Exporter - Sistema
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+
+  # cAdvisor - Contenedores
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_interval: 15s
+
+  # Backend API
+  - job_name: 'ai-news-backend'
+    static_configs:
+      - targets: ['backend:8000']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+    scrape_timeout: 10s
+
+  # Redis
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 30s
+
+  # PostgreSQL
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 30s
+
+  # Blackbox Exporter - HTTP Monitoring
+  - job_name: 'blackbox-http'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://backend:8000/health
+          - http://backend:8000/api/v1/health
+          - http://frontend:3000
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # Blackbox Exporter - TCP Monitoring
+  - job_name: 'blackbox-tcp'
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets:
+          - backend:8000
+          - postgres:5432
+          - redis:6379
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # StatsD Exporter
+  - job_name: 'statsd'
+    static_configs:
+      - targets: ['statsd-exporter:9102']
+    scrape_interval: 30s
+
+  # AlertManager
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+    scrape_interval: 15s
+
+  # Uptime Kuma
+  - job_name: 'uptime-kuma'
+    static_configs:
+      - targets: ['uptime-kuma:3001']
+    scrape_interval: 30s
+
+  # Backend health check endpoints
+  - job_name: 'ai-news-health'
+    static_configs:
+      - targets: ['backend:8000']
+    metrics_path: '/health'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # Celery monitoring
+  - job_name: 'celery'
+    static_configs:
+      - targets: ['celery-exporter:9540']
+    scrape_interval: 30s

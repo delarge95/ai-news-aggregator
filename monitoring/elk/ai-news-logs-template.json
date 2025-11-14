@@ -1,0 +1,96 @@
+{
+  "index_patterns": ["ai-news-logs-*", "ai-news-backend-*", "ai-news-celery-*", "ai-news-containers-*"],
+  "settings": {
+    "index": {
+      "number_of_shards": 1,
+      "number_of_replicas": 1,
+      "refresh_interval": "30s",
+      "max_result_window": 50000
+    },
+    "analysis": {
+      "analyzer": {
+        "ai_news_analyzer": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": [
+            "lowercase",
+            "stop",
+            "snowball"
+          ]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "@timestamp": {
+        "type": "date",
+        "format": "date_time"
+      },
+      "level": {
+        "type": "keyword"
+      },
+      "logger": {
+        "type": "keyword",
+        "fields": {
+          "text": {
+            "type": "text",
+            "analyzer": "ai_news_analyzer"
+          }
+        }
+      },
+      "log_message": {
+        "type": "text",
+        "analyzer": "ai_news_analyzer",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
+      },
+      "service": {
+        "type": "keyword"
+      },
+      "http_status": {
+        "type": "integer"
+      },
+      "http_method": {
+        "type": "keyword"
+      },
+      "http_path": {
+        "type": "keyword",
+        "fields": {
+          "text": {
+            "type": "text",
+            "analyzer": "ai_news_analyzer"
+          }
+        }
+      },
+      "duration": {
+        "type": "float"
+      },
+      "task_name": {
+        "type": "keyword"
+      },
+      "task_id": {
+        "type": "keyword"
+      },
+      "task_status": {
+        "type": "keyword"
+      },
+      "task_duration": {
+        "type": "float"
+      },
+      "error": {
+        "type": "boolean"
+      },
+      "docker_container": {
+        "type": "keyword"
+      },
+      "docker_image": {
+        "type": "keyword"
+      }
+    }
+  }
+}
