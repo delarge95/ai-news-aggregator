@@ -60,7 +60,7 @@ jobs:
           pip-audit --desc
 
       - name: 📊 Upload dependency reports
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: dependency-scan-reports
           path: |
@@ -125,7 +125,7 @@ jobs:
           docker run --rm security-scan-backend:latest ls -la /etc/shadow /etc/passwd || echo "Sensitive files check completed"
 
       - name: 📁 Upload container scan reports
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: container-scan-reports
           path: |
@@ -172,7 +172,7 @@ jobs:
         uses: github/codeql-action/analyze@v2
 
       - name: 📁 Upload code scan reports
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: code-scan-reports
           path: |
@@ -390,7 +390,7 @@ jobs:
           cat security-report.md
 
       - name: 📤 Upload security report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: security-scan-report
           path: security-report.md

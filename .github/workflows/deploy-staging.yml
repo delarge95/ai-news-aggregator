@@ -496,7 +496,7 @@ jobs:
           echo "Rollback information saved successfully"
 
       - name: 📤 Save rollback artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: rollback-info-${{ needs.pre-deployment.outputs.deployment-id }}
           path: rollback-info/

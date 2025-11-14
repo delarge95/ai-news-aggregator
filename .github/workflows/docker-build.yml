@@ -182,7 +182,7 @@ jobs:
           docker save ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }} -o backend-image.tar
 
       - name: 📤 Upload backend artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: backend-image
           path: backend-image.tar
@@ -290,7 +290,7 @@ jobs:
           docker save ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }} -o frontend-image.tar
 
       - name: 📤 Upload frontend artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: frontend-image
           path: frontend-image.tar
@@ -418,7 +418,7 @@ jobs:
           cat build-summary.md
 
       - name: 📤 Upload build summary
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: build-summary
           path: build-summary.md

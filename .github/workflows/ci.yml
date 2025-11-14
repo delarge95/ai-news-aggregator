@@ -147,7 +147,7 @@ jobs:
           fail_ci_if_error: false
 
       - name: 📁 Upload test results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: backend-test-results
@@ -202,7 +202,7 @@ jobs:
           CI: true
 
       - name: 📁 Upload test results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: frontend-test-results
@@ -306,7 +306,7 @@ jobs:
           VITE_API_URL: http://localhost:8000/api/v1
 
       - name: 📁 Upload E2E test results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: e2e-test-results
@@ -368,7 +368,7 @@ jobs:
           docker stop test-backend-container
 
       - name: 📁 Upload build artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: container-build-artifacts
           path: |

@@ -194,7 +194,7 @@ jobs:
           cat validation-report.md
 
       - name: 📤 Upload validation report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: environment-validation-report
           path: validation-report.md
@@ -447,7 +447,7 @@ jobs:
           cat setup-report.md
 
       - name: 📤 Upload setup report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: environment-setup-report
           path: setup-report.md
@@ -602,7 +602,7 @@ jobs:
           cat cleanup-report.md
 
       - name: 📤 Upload cleanup report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: environment-cleanup-report
           path: cleanup-report.md
@@ -675,7 +675,7 @@ jobs:
           cat environment-summary.md
 
       - name: 📤 Upload environment summary
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: environment-management-summary
           path: environment-summary.md

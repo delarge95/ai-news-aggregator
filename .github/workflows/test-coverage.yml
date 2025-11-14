@@ -131,7 +131,7 @@ jobs:
         verbose: true
 
     - name: 📋 Upload test results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: backend-test-results
@@ -221,7 +221,7 @@ jobs:
         fail_ci_if_error: false
 
     - name: 📋 Upload test results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: frontend-test-results
@@ -277,7 +277,7 @@ jobs:
         echo "ESLint report generated"
 
     - name: 📋 Upload lint results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: lint-results
@@ -413,7 +413,7 @@ jobs:
         cat coverage-summary.md
 
     - name: 📋 Upload coverage summary
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: coverage-summary
         path: coverage-summary.md
